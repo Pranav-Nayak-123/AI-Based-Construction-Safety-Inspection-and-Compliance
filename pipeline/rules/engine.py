@@ -365,6 +365,7 @@ class RuleEngine:
             confidence=episode.mean_confidence,
             distance=peak.result.distance,
             relative_band=peak.result.relative_band,
+            title=rule.title,
             observation_text=rule.render_observation(values),
             action_code=rule.action_code,
             action_text=rule.render_action(values),

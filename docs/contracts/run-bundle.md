@@ -34,10 +34,10 @@ Each `IncidentRecord` is a *confirmed* alert (condition persisted past its debou
 
 | Field | Meaning |
 |---|---|
-| `rule_id`, `severity`, `basis`, `references`, `action_code` | From `regulations/catalogue.v1.yaml` only — the LLM layers may reword, never change them |
+| `rule_id`, `title`, `severity`, `basis`, `references`, `action_code` | From `regulations/catalogue.v1.yaml` only — the LLM layers may reword, never change them |
 | `first_seen_s` / `confirmed_at_s` / `resolved_at_s` | Condition start / debounce met / condition ended |
 | `resolution_reason` | `condition_cleared`, `evidence_lost`, `shot_boundary`, `end_of_clip` |
-| `observation_text`, `action_text` | Deterministic template text (the FR-7 fallback) |
+| `observation_text`, `action_text` | Deterministic template text (the FR-7 fallback), written after the incident ended — states its full duration |
 | `distance`, `relative_band` | R4/R5 only: WH interval and band at the closest approach |
 | `helmet`, `vest` | Smoothed PPE state at the evidence frame |
 | `adjudication_candidate` | `true` → queue `evidence_crop_path` for L1 (PPE unknown or within 0.10 of the floor) |

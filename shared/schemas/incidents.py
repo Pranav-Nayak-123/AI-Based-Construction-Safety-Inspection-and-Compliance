@@ -43,6 +43,7 @@ class IncidentRecord(StrictModel):
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     distance: DistanceInterval | None = None
     relative_band: DistanceBand | None = None
+    title: str = ""
     observation_text: str
     action_code: str
     action_text: str

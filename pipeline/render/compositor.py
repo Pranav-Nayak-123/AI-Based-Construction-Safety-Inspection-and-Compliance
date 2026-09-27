@@ -67,6 +67,20 @@ def wrap_text(text: str, width: int, scale: float, thickness: int = 1) -> list[s
     return lines
 
 
+def card_headline(incident: IncidentRecord, time_s: float) -> tuple[str, str]:
+    """Card title and progress line, using only what is known at `time_s`.
+
+    The bundle's observation_text is written after the fact and states the final duration;
+    a card shown mid-incident must say how long it has lasted *so far*.
+    """
+    ongoing = incident.resolved_at_s is None or time_s < incident.resolved_at_s
+    end = time_s if ongoing or incident.resolved_at_s is None else incident.resolved_at_s
+    elapsed = max(0.0, end - incident.first_seen_s)
+    worker = display_track_label(incident.canonical_track_id or "")
+    progress = f"{elapsed:.1f} s so far" if ongoing else f"resolved after {elapsed:.1f} s"
+    return incident.title or incident.reason_code, f"Worker {worker} - {progress}"
+
+
 class Compositor:
     def __init__(
         self,
@@ -119,14 +133,17 @@ class Compositor:
         x0, x1 = MARGIN, self.width - MARGIN
         y0 = self.timeline_top + 22
         cv2.rectangle(image, (x0, y0), (x1, y0 + 18), PANEL, -1)
+        next_label_x = x0
         for incident in self.incidents:
             end = incident.resolved_at_s if incident.resolved_at_s is not None else self.duration_s
             a, b = self._timeline_x(incident.first_seen_s), self._timeline_x(end)
             color = SEVERITY_COLORS.get(incident.severity, MUTED)
             cv2.rectangle(image, (a, y0 + 2), (max(a + 2, b), y0 + 16), color, -1)
-            cv2.putText(
-                image, incident.rule_id.value, (a, y0 - 4), FONT, 0.4, color, 1, cv2.LINE_AA
-            )
+            if a >= next_label_x:  # skip labels that would overprint their neighbour
+                cv2.putText(
+                    image, incident.rule_id.value, (a, y0 + 32), FONT, 0.4, color, 1, cv2.LINE_AA
+                )
+                next_label_x = a + 30
         cv2.putText(
             image, "Timeline", (x0, self.timeline_top + 12), FONT, 0.45, MUTED, 1, cv2.LINE_AA
         )
@@ -254,11 +271,6 @@ class Compositor:
             text_x = x + 14 + crop_width + 14
         text_width = x + width - 12 - text_x
 
-        status = (
-            "ongoing"
-            if incident.resolved_at_s is None or time_s < incident.resolved_at_s
-            else "resolved"
-        )
         draw_label(
             image,
             f"{incident.rule_id.value}  {incident.severity.upper()}",
@@ -266,13 +278,10 @@ class Compositor:
             color,
             scale=0.55,
         )
+        title, progress = card_headline(incident, time_s)
         lines = [
-            (incident.observation_text, TEXT, 0.5),
-            (
-                f"Worker {display_track_label(incident.canonical_track_id or '')} - {status}",
-                MUTED,
-                0.45,
-            ),
+            (title, TEXT, 0.55),
+            (progress, TEXT, 0.5),
             (f"Action: {incident.action_text}", TEXT, 0.45),
         ]
         if incident.references:

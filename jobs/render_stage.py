@@ -85,6 +85,7 @@ def render_run(
     frames = 0
     stored = store.frames_with_observations()
     previous_shot: str | None = None
+    last_crops: dict[str, np.ndarray] = {}
     with VideoEncoder(
         video_path,
         width=render.output_width,
@@ -119,11 +120,11 @@ def render_run(
             )
             plan_pane = plan.render(observations=observations, output=output, proposals=proposals)
             by_track = {o.canonical_track_id: o for o in observations}
-            crops = {
-                incident.incident_id: _crop(decoded.image, by_track[incident.canonical_track_id])
-                for incident in compositor.visible_incidents(record.video_time_s)
-                if incident.canonical_track_id in by_track
-            }
+            for incident in compositor.visible_incidents(record.video_time_s):
+                subject = by_track.get(incident.canonical_track_id or "")
+                if subject is not None:  # keep the last sighting once the worker leaves
+                    last_crops[incident.incident_id] = _crop(decoded.image, subject)
+            crops = last_crops
             workers = sum(1 for o in observations if o.object_class == PERSON_CLASS)
             status = (
                 f"Tracking {workers} worker(s) and {len(observations) - workers} machine(s) "

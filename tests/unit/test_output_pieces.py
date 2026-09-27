@@ -10,7 +10,7 @@ import pytest
 from rule_frames import frame, helmet, rules_config, times, worker, zone
 
 from pipeline.intake.prefetch import Prefetch
-from pipeline.render.compositor import Compositor
+from pipeline.render.compositor import Compositor, card_headline
 from pipeline.render.encoder import _codec_arguments, resolve_codec
 from pipeline.render.plan_view import PlanView
 from pipeline.report.html import render_report
@@ -147,3 +147,13 @@ def test_report_escapes_every_text_field() -> None:
     assert "<script>" not in html
     assert "&lt;script&gt;" in html
     assert "Worker 7 was repeatedly observed" in html
+
+
+def test_cards_never_state_the_future() -> None:
+    [incident] = _incidents().incidents  # no helmet from 1.0 s to 3.0 s
+    assert incident.title == "Apparent missing helmet"
+    title, progress = card_headline(incident, incident.confirmed_at_s)
+    assert title == "Apparent missing helmet"
+    assert progress == f"Worker 7 - {incident.confirmed_at_s - 1.0:.1f} s so far"
+    assert "2.0" not in progress  # the final duration is not known yet
+    assert card_headline(incident, 5.0)[1] == "Worker 7 - resolved after 2.0 s"
