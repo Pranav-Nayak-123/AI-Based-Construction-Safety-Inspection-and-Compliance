@@ -33,6 +33,19 @@ vision = [
   "torchvision>=0.25,<0.27",
   "ultralytics>=8.4.163,<8.5",
 ]
+# One-time build of the open-vocabulary detector's class embeddings (YOLOE text prompts).
+# Runtime loads the saved model and never needs these.
+openvocab = [
+  "clip",
+  "ftfy>=6,<7",
+]
+# Incident-narration LLM (L4): LoRA fine-tuning and inference with Hugging Face on
+# CUDA/MPS/CPU. The M1 teammates may use MLX instead; the corpus and evaluation are shared.
+narration = [
+  "accelerate>=1.10,<2",
+  "peft>=0.17,<1",
+  "transformers>=4.57,<6",
+]
 report = [
   "pandas>=2.2,<3",
   "pyarrow>=17,<23",
@@ -47,6 +60,7 @@ dev = [
 ]
 
 [tool.uv.sources]
+clip = { git = "https://github.com/ultralytics/CLIP.git" }
 torch = [{ index = "pytorch-cu128", marker = "sys_platform == 'win32'" }]
 torchvision = [{ index = "pytorch-cu128", marker = "sys_platform == 'win32'" }]
 

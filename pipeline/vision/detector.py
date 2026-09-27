@@ -71,7 +71,7 @@ class Stage1Detector:
         self.config = config
         self.weights = weights
         self.device = resolve_device(config.device)
-        self.model = YOLO(str(weights), task="detect")
+        self.model = YOLO(str(weights))  # task from the checkpoint (YOLOE is a seg model)
         self.classes = resolve_model_classes(self.model.names, class_map or config.class_map)
         self._keep = sorted(self.classes)
         self._sha256: str | None = None

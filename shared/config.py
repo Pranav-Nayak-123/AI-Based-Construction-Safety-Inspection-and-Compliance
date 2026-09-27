@@ -25,6 +25,7 @@ class Stage1Config(StrictModel):
     pretrained_fallback: str
     class_map: str
     machinery_classes: tuple[str, ...]
+    evidence_classes: tuple[str, ...] = ()
     image_size: int
     confidence: float
     iou: float
@@ -50,6 +51,9 @@ class PPEConfig(StrictModel):
     minimum_person_height_px: int
     temporal_alpha: float
     minimum_observations: int
+    minimum_upright_aspect: float
+    classify_every_frames: int
+    helmet_evidence_confidence: float
 
 
 class PoseConfig(StrictModel):
@@ -70,12 +74,15 @@ class RelativePlaneConfig(StrictModel):
     minimum_vertical_inlier_ratio: float
     maximum_reprojection_rms_px: float
     maximum_temporal_horizon_shift_px: float
+    focal_prior_widths: tuple[float, float]
+    maximum_relative_rms: float
 
 
 class UncertaintyConfig(StrictModel):
     bootstrap_samples: int
     confidence_level: float
     minimum_successful_samples: int
+    frame_replicates: int
     temporal_block_seconds: float
     seed: int
 

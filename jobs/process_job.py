@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.metadata
+import math
 import time
 import uuid
 from collections.abc import Callable
@@ -28,6 +29,12 @@ from pipeline.intake.frames import FrameSource, sample_raw_frames
 from pipeline.intake.geometry_gate import CameraMode, GeometryGate, classify_drift, gate_geometry
 from pipeline.intake.probe import VideoMetadata, probe_video
 from pipeline.intake.stabilization import DriftProbe, probe_drift
+from pipeline.mapping.camera_model import (
+    GroundMapper,
+    PlaneFit,
+    fit_camera,
+    sample_vertical_pairs,
+)
 from pipeline.mapping.frame_context import FrameContextBuilder
 from pipeline.output.bundle import validate_bundle, write_model
 from pipeline.output.summaries import TrackSummaryBuilder
@@ -40,8 +47,9 @@ from pipeline.scene.site_config import (
     scene_from_site_config,
     view_matches,
 )
-from pipeline.vision.detector import Stage1Detector, resolve_weights
+from pipeline.vision.detector import Stage1Detector, file_sha256, resolve_weights
 from pipeline.vision.pass1 import Pass1Summary, VisionPass
+from pipeline.vision.ppe_model import PPEClassifier
 from pipeline.vision.tracker import ByteTrackAdapter
 from shared.config import AppConfig, load_config
 from shared.enums import JobStage, ProcessingStatus
@@ -136,6 +144,8 @@ class ProcessJob:
         self.site_config = site_config
         self.report = report or (lambda message: None)
         self.warnings: list[str] = []
+        self.model_ids: dict[str, str] = {}
+        self.plane_fits: dict[str, PlaneFit] = {}
 
     def run(self) -> RunManifest:
         if self.run_dir.exists():
@@ -175,13 +185,14 @@ class ProcessJob:
             tracker = ByteTrackAdapter(
                 self.config.tracker,
                 self.config.intake.target_fps,
-                sorted(set(detector.classes.values())),
+                sorted(set(detector.classes.values()) - set(self.config.stage1.evidence_classes)),
             )
+            ppe = self._ppe_classifier(detector.device)
             store = Pass1Store(self.work_dir / "pass1.sqlite")
             expected = max(1, round(metadata.duration_s * self.config.intake.target_fps))
-            pass1 = VisionPass(detector, tracker, self.config, camera_mode=decision.mode).run(
-                source, store, progress=self._progress("detect", expected)
-            )
+            pass1 = VisionPass(
+                detector, tracker, self.config, camera_mode=decision.mode, ppe=ppe
+            ).run(source, store, progress=self._progress("detect", expected))
             store.set_meta("detector_sha256", detector.model_sha256())
             store.mark_complete()
             self.warnings += source.warnings
@@ -193,8 +204,9 @@ class ProcessJob:
 
         with timer.stage(JobStage.MAPPING_RULES):
             gate = self._geometry_gate(decision.mode, drift, pass1)
+            self.plane_fits = self._fit_planes(store, pass1, gate)
             scene = self._scene(source, store, pass1, video_sha)
-            pass2 = self._pass2(store, scene, gate)
+            pass2 = self._pass2(store, scene, gate, ppe_available=ppe is not None)
             self.report(
                 f"pass 2: {len(pass2.rules.incidents)} incident(s); geometry "
                 f"{'supported' if gate.supported else 'unsupported'} ({gate.reason_code})"
@@ -209,6 +221,9 @@ class ProcessJob:
                 config=self.config,
                 run_dir=self.run_dir,
                 title=f"Construction Safety Twin  |  {self.video.name}",
+                mappers={
+                    shot: GroundMapper(fit) for shot, fit in self.plane_fits.items() if fit.accepted
+                },
                 progress=self._progress("render", pass1.frames),
             )
         store.close()
@@ -299,15 +314,81 @@ class ProcessJob:
             config, shot_ids=matched, video_sha256=video_sha, warnings=tuple(self.warnings[-1:])
         )
 
-    def _pass2(self, store: Pass1Store, scene: SceneCache, gate: GeometryGate) -> Pass2Result:
-        self.warnings.append("PPE classifier not trained yet: R1/R2 unsupported")
-        self.warnings.append("relative plane not fitted yet: R4/R5 distances inconclusive")
+    def _fit_planes(
+        self, store: Pass1Store, pass1: Pass1Summary, gate: GeometryGate
+    ) -> dict[str, PlaneFit]:
+        """Calibrate the camera from upright workers, once per shot (v7 §37)."""
+        if not gate.supported:
+            return {}
+        plane, uncertainty = self.config.relative_plane, self.config.uncertainty
+        canvas = (self.config.intake.target_width, self.config.intake.target_height)
+        fits: dict[str, PlaneFit] = {}
+        for shot in pass1.shots:
+            frames = (
+                (record, observations)
+                for record, observations in store.frames_with_observations()
+                if record.shot_id == shot and record.transform_valid
+            )
+            pairs = sample_vertical_pairs(
+                frames,
+                minimum_height_px=plane.minimum_pixel_height,
+                minimum_confidence=0.5,
+                minimum_aspect=self.config.ppe.minimum_upright_aspect + 0.4,
+                spacing_s=self.config.pose.sample_spacing_seconds,
+                maximum_per_track=self.config.pose.maximum_samples_per_track,
+                canvas=canvas,
+            )
+            fit = fit_camera(
+                pairs,
+                canvas,
+                minimum_pairs=plane.minimum_pairs,
+                minimum_tracks=plane.minimum_distinct_tracks,
+                minimum_inlier_ratio=plane.minimum_vertical_inlier_ratio,
+                bootstrap_samples=uncertainty.bootstrap_samples,
+                minimum_successful=uncertainty.minimum_successful_samples,
+                seed=uncertainty.seed,
+                focal_prior=plane.focal_prior_widths,
+                maximum_relative_rms=plane.maximum_relative_rms,
+            )
+            fits[shot] = fit
+            if fit.accepted and fit.parameters is not None:
+                p = fit.parameters
+                self.report(
+                    f"camera {shot}: tilt {math.degrees(p.tilt_rad):.1f} deg, "
+                    f"roll {math.degrees(p.roll_rad):.1f} deg, height {p.height_wh:.2f} WH, "
+                    f"focal {p.focal_px:.0f} px from {fit.observations} observations"
+                )
+            else:
+                self.warnings.append(
+                    f"camera calibration rejected for {shot} ({fit.reason_code}): "
+                    "R4/R5 distances inconclusive"
+                )
+        return fits
+
+    def _ppe_classifier(self, device: str) -> PPEClassifier | None:
+        path = self.root / self.config.ppe.model_path
+        if not path.is_file():
+            self.warnings.append("PPE classifier not trained yet: R1/R2 unsupported")
+            return None
+        self.model_ids["ppe"] = f"{path.name}:{file_sha256(path)[:16]}"
+        return PPEClassifier(path, device, batch_size=self.config.ppe.batch_size)
+
+    def _pass2(
+        self, store: Pass1Store, scene: SceneCache, gate: GeometryGate, *, ppe_available: bool
+    ) -> Pass2Result:
         builder = FrameContextBuilder(
             run_id=self.run_id,
             scene=scene,
             geometry_supported=gate.supported,
-            ppe_available=False,
+            ppe_available=ppe_available,
             machinery_classes=self.config.stage1.machinery_classes,
+            mappers={
+                shot: GroundMapper(fit, max_replicates=self.config.uncertainty.frame_replicates)
+                for shot, fit in self.plane_fits.items()
+                if fit.accepted
+            },
+            rules=self.config.rules,
+            seed=self.config.uncertainty.seed,
         )
         engine = RuleEngine(run_id=self.run_id, config=self.config.rules)
         return run_pass2(store, builder, engine, TrackSummaryBuilder(self.run_id))
@@ -353,7 +434,10 @@ class ProcessJob:
                 duration_s=metadata.duration_s,
                 fps=metadata.fps,
             ),
-            model_ids={"stage1": f"{weights.name}:{detector.model_sha256()[:16]}"},
+            model_ids={
+                "stage1": f"{weights.name}:{detector.model_sha256()[:16]}",
+                **self.model_ids,
+            },
             dependency_versions=_versions(),
             scene_cache_status=scene.cache_key,
             rule_coverage=pass2.rules.coverage,
@@ -383,9 +467,16 @@ class ProcessJob:
                     "detector": round(pass1.detect_s, 1),
                     "waiting_for_decode": round(pass1.decode_wait_s, 1),
                     "tracking": round(pass1.track_s, 1),
+                    "ppe": round(pass1.ppe_s, 1),
+                    "hard_hat_overrides": pass1.helmet_evidence_overrides,
                     "store": round(pass1.store_s, 1),
                 },
                 "rendered_frames": rendered.frames,
+                "camera_fits": {
+                    shot: fit.model_dump(mode="json", exclude={"bootstrap", "support_polygon"})
+                    | {"bootstrap_replicates": len(fit.bootstrap)}
+                    for shot, fit in self.plane_fits.items()
+                },
             },
         )
         write_model(self.run_dir / RUN_MANIFEST_FILE, manifest)

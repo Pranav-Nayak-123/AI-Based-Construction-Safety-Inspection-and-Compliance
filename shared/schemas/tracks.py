@@ -34,6 +34,9 @@ class Pass1TrackObservation(StrictModel):
     # drawing overlays on source frames (equal to box_reference for a fixed camera).
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     box_oriented: Box2 | None = None
+    # Machinery only: mean frame-to-frame intensity change inside the box (0-1), the
+    # articulation cue for operating state (v7 §38).
+    motion_energy: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class MappedTrackRecord(StrictModel):

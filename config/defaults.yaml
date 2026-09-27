@@ -12,10 +12,14 @@ intake:
 
 stage1:
   model_path: artifacts/models/stage1/best.pt
-  # Used until a fine-tuned checkpoint is promoted to model_path.
-  pretrained_fallback: artifacts/models/pretrained/yolo26l.pt
-  class_map: coco_pretrained
+  # Used until a fine-tuned checkpoint is promoted to model_path: open-vocabulary YOLOE-26l
+  # prompted with construction classes (tools/build_open_vocab.py), which detects machinery
+  # that COCO-trained models cannot.
+  pretrained_fallback: artifacts/models/pretrained/yoloe-26l-construction.pt
+  class_map: yoloe_construction
   machinery_classes: [machinery, vehicle]
+  # Detected but never tracked: used as supporting evidence for other stages.
+  evidence_classes: [helmet]
   image_size: 960
   confidence: 0.20
   iou: 0.60
@@ -40,6 +44,13 @@ ppe:
   minimum_person_height_px: 40
   temporal_alpha: 0.35
   minimum_observations: 4
+  # Head/torso bands assume an upright worker; a wider box (crouching, bending) is not
+  # assessable for PPE on that frame.
+  minimum_upright_aspect: 1.6
+  # Classify on every Nth frame; the temporal filter carries the state in between.
+  classify_every_frames: 2
+  # A detected hard hat on the head overrides the classifier for that frame.
+  helmet_evidence_confidence: 0.35
 
 pose:
   model_path: artifacts/models/pose/yolo26n-pose.pt
@@ -58,11 +69,20 @@ relative_plane:
   minimum_vertical_inlier_ratio: 0.65
   maximum_reprojection_rms_px: 3.0
   maximum_temporal_horizon_shift_px: 5.0
+  # Detector boxes carry no lean information, so the focal length comes from typical
+  # CCTV lenses (about 85 to 50 degrees horizontal field of view), in canvas widths.
+  focal_prior_widths: [0.55, 1.07]
+  # Inlier head error relative to person height. People differ ~4 % in height and boxes
+  # jitter, so ~8 % is the physical noise floor for box-based observations.
+  maximum_relative_rms: 0.10
 
 uncertainty:
   bootstrap_samples: 500
   confidence_level: 0.95
   minimum_successful_samples: 350
+  # Per-frame distance intervals use this many of the camera replicates: interval bounds
+  # then carry a few percent Monte Carlo error, at a fraction of the cost.
+  frame_replicates: 200
   temporal_block_seconds: 2.0
   seed: 42017
 

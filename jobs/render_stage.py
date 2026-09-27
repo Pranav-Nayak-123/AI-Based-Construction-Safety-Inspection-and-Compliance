@@ -6,7 +6,7 @@ store and pass-two outputs by processed frame index.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -17,10 +17,12 @@ from jobs.pass2 import Pass2Result
 from pipeline.cache.pass1_store import Pass1Store
 from pipeline.intake.frames import FrameSource, Letterbox, read_frame_at
 from pipeline.intake.prefetch import Prefetch
+from pipeline.mapping.camera_model import GroundMapper
 from pipeline.render.compositor import Compositor
 from pipeline.render.encoder import VideoEncoder
 from pipeline.render.plan_view import PlanView
 from pipeline.render.source_overlay import ALERT, render_source_frame
+from pipeline.render.twin3d import TwinRenderer
 from shared.config import AppConfig
 from shared.enums import PERSON_CLASS
 from shared.errors import PipelineError
@@ -60,6 +62,7 @@ def render_run(
     config: AppConfig,
     run_dir: Path,
     title: str,
+    mappers: Mapping[str, GroundMapper] | None = None,
     progress: Callable[[int], None] | None = None,
 ) -> RenderResult:
     render = config.render
@@ -85,6 +88,7 @@ def render_run(
     frames = 0
     stored = store.frames_with_observations()
     previous_shot: str | None = None
+    twin: TwinRenderer | None = None
     last_crops: dict[str, np.ndarray] = {}
     with VideoEncoder(
         video_path,
@@ -107,6 +111,17 @@ def render_run(
             if record.shot_id != previous_shot:
                 plan.reset()
                 previous_shot = record.shot_id
+                mapper = (mappers or {}).get(record.shot_id)
+                twin = (
+                    TwinRenderer(
+                        (render.pane_width, render.pane_height),
+                        mapper,
+                        scene.proposals_for(record.shot_id),
+                        fps=config.intake.target_fps,
+                    )
+                    if mapper is not None
+                    else None
+                )
             output = pass2.frame_outputs.get(record.frame_index)
             proposals = scene.proposals_for(record.shot_id)
             source_pane = render_source_frame(
@@ -118,7 +133,18 @@ def render_run(
                 size=(render.pane_width, render.pane_height),
                 hud=False,
             )
-            plan_pane = plan.render(observations=observations, output=output, proposals=proposals)
+            if twin is not None:
+                plan_pane = twin.render(
+                    time_s=record.video_time_s,
+                    observations=observations,
+                    output=output,
+                    machine_states=pass2.machine_states.get(record.frame_index, {}),
+                    machinery_classes=frozenset(config.stage1.machinery_classes),
+                )
+            else:
+                plan_pane = plan.render(
+                    observations=observations, output=output, proposals=proposals
+                )
             by_track = {o.canonical_track_id: o for o in observations}
             for incident in compositor.visible_incidents(record.video_time_s):
                 subject = by_track.get(incident.canonical_track_id or "")

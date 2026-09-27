@@ -2,7 +2,8 @@
 # A null target drops that class. With `ignore_unlisted: false`, a native class missing
 # from the map is an error rather than silently mapped.
 schema_version: 1
-taxonomy: [person, machinery, vehicle]
+# `helmet` is evidence only: detected hard hats support the PPE head, they are never tracked.
+taxonomy: [person, machinery, vehicle, helmet]
 maps:
   # Pretrained COCO weights: the Phase 2 baseline. COCO has no construction machinery.
   coco_pretrained:
@@ -12,4 +13,25 @@ maps:
       car: vehicle
       truck: vehicle
       bus: vehicle
+  # Open-vocabulary YOLOE-26l with the construction prompts of tools/build_open_vocab.py.
+  yoloe_construction:
+    ignore_unlisted: false
+    classes:
+      person: person
+      hard hat: helmet
+      excavator: machinery
+      # A tower crane's hazard is its suspended load, not its fixed mast; R4 models
+      # proximity to moving plant on the ground, so masts are not tracked as machinery.
+      tower crane: null
+      mobile crane: machinery
+      wheel loader: machinery
+      bulldozer: machinery
+      backhoe loader: machinery
+      forklift: machinery
+      road roller: machinery
+      concrete pump truck: machinery
+      concrete mixer truck: vehicle
+      dump truck: vehicle
+      truck: vehicle
+      car: vehicle
   # Frozen after profiling the Roboflow Construction Site Safety v27 export (Phase 3).
