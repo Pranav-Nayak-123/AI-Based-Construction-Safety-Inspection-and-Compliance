@@ -44,7 +44,14 @@ EDGE = hex_bgr("#FF7A2F")
 WORKER = hex_bgr("#DDE3EA")
 HELMET_YELLOW = hex_bgr("#F6C343")
 
-SEVERITY = {"critical": CRITICAL, "high": DANGER, "medium": WARN, "low": hex_bgr("#9BCB3C")}
+# Incident severity uses the report's status palette (critical / serious / warning / good),
+# so a card in the video and the same card in report.html carry the same colour.
+SEVERITY = {
+    "critical": hex_bgr("#D03B3B"),
+    "high": hex_bgr("#EC835A"),
+    "medium": hex_bgr("#FAB219"),
+    "low": hex_bgr("#0CA30C"),
+}
 
 
 @functools.lru_cache(maxsize=64)
@@ -70,6 +77,7 @@ def _sprite(text: str, size: int, weight: str) -> tuple[np.ndarray, int, int]:
     return np.asarray(image, np.float32) / 255.0, left, top
 
 
+@functools.lru_cache(maxsize=16384)
 def text_size(text: str, size: int, weight: str = "Regular") -> tuple[int, int]:
     face = font(size, weight)
     left, top, right, bottom = face.getbbox(text)
@@ -217,6 +225,44 @@ def chip(
         image, text, (x + box_w // 2, y + box_h // 2), size, color, weight=weight, anchor="mm"
     )
     return box_w, box_h
+
+
+def chip_size(
+    text: str, *, size: int = 13, weight: str = "SemiBold", padding: tuple[int, int] = (8, 4)
+) -> tuple[int, int]:
+    width, _ = text_size(text, size, weight)
+    return width + 2 * padding[0], line_height(size) + 2 * padding[1] - 4
+
+
+class LabelPlacer:
+    """Greedy, collision-aware placement for chips anchored above boxes."""
+
+    def __init__(self, bounds: tuple[int, int]) -> None:
+        self.width, self.height = bounds
+        self.taken: list[tuple[int, int, int, int]] = []
+
+    def _free(self, rect: tuple[int, int, int, int]) -> bool:
+        x1, y1, x2, y2 = rect
+        return all(x2 <= a or x1 >= c or y2 <= b or y1 >= d for a, b, c, d in self.taken)
+
+    def place(
+        self, x: int, bottom: int, width: int, height: int, *, force: bool = False, tries: int = 4
+    ) -> tuple[int, int] | None:
+        """Top-left for a chip whose bottom edge wants to sit at `bottom`, moving up."""
+        x = int(min(max(x, 0), max(0, self.width - width)))
+        for attempt in range(tries):
+            top = bottom - height - attempt * (height + 2)
+            if top < 0:
+                break
+            rect = (x, top, x + width, top + height)
+            if self._free(rect):
+                self.taken.append(rect)
+                return x, top
+        if force:
+            top = max(0, bottom - height)
+            self.taken.append((x, top, x + width, top + height))
+            return x, top
+        return None
 
 
 def readable_on(fill: BGR) -> BGR:

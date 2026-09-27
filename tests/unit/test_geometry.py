@@ -60,7 +60,9 @@ def test_polygon_and_polyline_distances() -> None:
     points = np.array([[[1, 1], [3, 1], [5, 6]]], float)
     assert distance_to_polygon(points, square)[0].tolist() == pytest.approx([0.0, 1.0, 5.0])
     line = np.array([[[0, 0], [4, 0]]], float)
-    assert distance_to_polyline(points, line)[0].tolist() == pytest.approx([1.0, 1.0, math.sqrt(37)])
+    assert distance_to_polyline(points, line)[0].tolist() == pytest.approx(
+        [1.0, 1.0, math.sqrt(37)]
+    )
 
 
 def test_footprint_extends_away_from_the_camera() -> None:

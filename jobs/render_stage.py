@@ -152,13 +152,14 @@ def render_run(
                     last_crops[incident.incident_id] = _crop(decoded.image, subject)
             crops = last_crops
             workers = sum(1 for o in observations if o.object_class == PERSON_CLASS)
-            status = (
-                f"Tracking {workers} worker(s) and {len(observations) - workers} machine(s) "
-                "in this frame"
-            )
             encoder.write(
                 compositor.compose(
-                    source_pane, plan_pane, time_s=record.video_time_s, crops=crops, status=status
+                    source_pane,
+                    plan_pane,
+                    time_s=record.video_time_s,
+                    crops=crops,
+                    workers=workers,
+                    machines=len(observations) - workers,
                 )
             )
             for incident in evidence_by_frame.get(record.frame_index, []):

@@ -23,6 +23,21 @@ class RuleResult(StrictModel):
     references: tuple[str, ...] = ()
 
 
+class IncidentNarration(StrictModel):
+    """Readable briefing for an incident (L4), shown only after the L5 guardrail passed.
+
+    `source` is "model" when the fine-tuned narrator's text passed all eight checks and
+    "template" when it fell back to the deterministic text.
+    """
+
+    summary: str
+    caveat: str
+    action: str
+    source: str
+    model: str | None = None
+    failed_checks: tuple[str, ...] = ()
+
+
 class IncidentRecord(StrictModel):
     schema_version: int = 1
     incident_id: str
@@ -60,3 +75,4 @@ class IncidentRecord(StrictModel):
     adjudication_candidate: bool = False
     # Why the episode ended: condition_cleared | evidence_lost | shot_boundary | end_of_clip.
     resolution_reason: str | None = None
+    narration: IncidentNarration | None = None

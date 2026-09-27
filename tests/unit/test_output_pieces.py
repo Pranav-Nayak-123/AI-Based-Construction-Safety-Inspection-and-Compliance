@@ -20,6 +20,7 @@ from shared.coordinates import Box2, Point2
 from shared.enums import CoordinateSpace, HelmetState, ProcessingStatus
 from shared.identity import canonical_track_id
 from shared.paths import CACHE_ENV, cache_root, run_work_dir
+from shared.schemas.incidents import IncidentNarration
 from shared.schemas.run import InputVideoMeta, RunManifest
 from shared.schemas.tracks import Pass1TrackObservation
 
@@ -143,10 +144,22 @@ def test_report_escapes_every_text_field() -> None:
         rule_coverage=result.coverage,
         warnings=("<script>alert(1)</script>",),
     )
-    html = render_report(manifest, result.incidents)
-    assert "<script>" not in html
+    [incident] = result.incidents
+    narrated = incident.model_copy(
+        update={
+            "narration": IncidentNarration(
+                summary="<img src=x onerror=alert(1)> seen", caveat="c", action="a", source="model"
+            )
+        }
+    )
+    html = render_report(manifest, [narrated])
+    # The page carries exactly one script: its own. Nothing from the data becomes markup.
+    assert html.count("<script>") == 1
+    assert "<script>alert" not in html and "clip<script>" not in html
     assert "&lt;script&gt;" in html
-    assert "Worker 7 was repeatedly observed" in html
+    assert "<img src=x" not in html and "&lt;img src=x" in html
+    assert "AI narration" in html
+    assert "Worker 7 was repeatedly observed" in render_report(manifest, result.incidents)
 
 
 def test_cards_never_state_the_future() -> None:
@@ -154,6 +167,6 @@ def test_cards_never_state_the_future() -> None:
     assert incident.title == "Apparent missing helmet"
     title, progress = card_headline(incident, incident.confirmed_at_s)
     assert title == "Apparent missing helmet"
-    assert progress == f"Worker 7 - {incident.confirmed_at_s - 1.0:.1f} s so far"
+    assert progress == f"Worker 7 · {incident.confirmed_at_s - 1.0:.1f} s so far"
     assert "2.0" not in progress  # the final duration is not known yet
-    assert card_headline(incident, 5.0)[1] == "Worker 7 - resolved after 2.0 s"
+    assert card_headline(incident, 5.0)[1] == "Worker 7 · resolved after 2.0 s"

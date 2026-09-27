@@ -155,6 +155,7 @@ source = { editable = "." }
 dependencies = [
     { name = "numpy" },
     { name = "opencv-python" },
+    { name = "pillow" },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "rich" },
@@ -204,6 +205,7 @@ requires-dist = [
     { name = "opencv-python", specifier = ">=4.10,<6" },
     { name = "pandas", marker = "extra == 'report'", specifier = ">=2.2,<3" },
     { name = "peft", marker = "extra == 'narration'", specifier = ">=0.17,<1" },
+    { name = "pillow", specifier = ">=11,<13" },
     { name = "pyarrow", marker = "extra == 'report'", specifier = ">=17,<23" },
     { name = "pydantic", specifier = ">=2.12,<3" },
     { name = "pyyaml", specifier = ">=6,<7" },

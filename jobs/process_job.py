@@ -480,7 +480,9 @@ class ProcessJob:
             },
         )
         write_model(self.run_dir / RUN_MANIFEST_FILE, manifest)
-        write_report(self.run_dir / REPORT_FILE, manifest, pass2.rules.incidents)
+        write_report(
+            self.run_dir / REPORT_FILE, manifest, pass2.rules.incidents, tracks=pass2.tracks_summary
+        )
         check = validate_bundle(self.run_dir, require_media=True)
         if not check.ok:
             raise PipelineError("BUNDLE_INVALID", "; ".join(check.problems))
