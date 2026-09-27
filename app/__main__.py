@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from app.window import launch_window
@@ -20,9 +21,20 @@ def main(argv: list[str] | None = None) -> int:
 
     process = sub.add_parser(
         "process",
-        help="Run the Week-1 fake pipeline on a video (placeholder twin + R1–R5 coverage)",
+        help="Process a fixed-camera clip into a run bundle (side-by-side MP4 + incidents)",
     )
     process.add_argument("video", type=Path, help="Path to an input video file")
+    process.add_argument(
+        "--site",
+        type=Path,
+        default=None,
+        help="Site config JSON with restricted zones and edges for this camera (R3/R5)",
+    )
+    process.add_argument(
+        "--synthetic",
+        action="store_true",
+        help="Run the Week-1 synthetic pipeline instead (no models needed; placeholder video)",
+    )
     process.add_argument(
         "--output-root",
         type=Path,
@@ -38,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
     process.add_argument(
         "--skip-video",
         action="store_true",
-        help="Skip ffmpeg encode (writes empty safety_twin.mp4) for schema-only smoke tests",
+        help="With --synthetic: skip the placeholder encode (schema-only smoke tests)",
     )
 
     args = parser.parse_args(argv)
@@ -53,6 +65,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "app":
         return launch_window()
+
+    if args.command == "process" and not (args.synthetic or args.skip_video):
+        return _process(args)
 
     if args.command == "process":
         job = FakePipelineJob(
@@ -71,6 +86,31 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     return 1
+
+
+def _process(args: argparse.Namespace) -> int:
+    # Imported here so `status`, `app` and `--synthetic` work without the vision extra.
+    from jobs.process_job import ProcessJob
+    from shared.errors import PipelineError
+
+    job = ProcessJob(
+        args.video,
+        output_root=args.output_root,
+        site_config=args.site,
+        run_id=args.run_id,
+        report=lambda message: print(message, flush=True),
+    )
+    try:
+        manifest = job.run()
+    except PipelineError as error:
+        print(f"failed: {error}", file=sys.stderr)
+        return 2
+    print(f"run_id={manifest.run_id}")
+    print(f"output={job.run_dir}")
+    for warning in manifest.warnings:
+        print(f"warning: {warning}")
+    print(manifest.disclaimer)
+    return 0
 
 
 if __name__ == "__main__":

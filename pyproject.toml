@@ -28,9 +28,10 @@ packages = ["app", "jobs", "pipeline", "twin", "shared", "llm", "tools", "evalua
 # macOS and Linux use the default PyPI wheels (MPS / CPU).
 [project.optional-dependencies]
 vision = [
+  "lap>=0.5.12,<1",  # ByteTrack assignment; declared so Ultralytics never pip-installs at runtime
   "torch>=2.10,<2.12",
   "torchvision>=0.25,<0.27",
-  "ultralytics>=8.4.160,<8.5",
+  "ultralytics>=8.4.163,<8.5",
 ]
 report = [
   "pandas>=2.2,<3",

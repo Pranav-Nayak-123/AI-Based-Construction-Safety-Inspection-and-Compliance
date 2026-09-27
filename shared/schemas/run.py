@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import Field
 
 from shared.coordinates import StrictModel
@@ -51,6 +53,9 @@ class RunManifest(StrictModel):
     failures: tuple[str, ...] = ()
     pass_timings: tuple[PassTiming, ...] = ()
     output_artifacts: dict[str, str] = Field(default_factory=dict)
+    # Pipeline measurements behind the coverage verdicts (camera mode, drift, geometry
+    # gate, frame and detection counts). Free-form so stages can add evidence freely.
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
     disclaimer: str = (
         "Approximate 2.5D visualization — positions and zones are inferred from video. "
         "Heuristic triage only; not legal advice or certified safety measurement."

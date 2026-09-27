@@ -162,8 +162,12 @@ def render_source_frame(
     proposals: Sequence[SceneProposal],
     time_s: float,
     size: tuple[int, int] | None = None,
+    hud: bool = True,
 ) -> np.ndarray:
-    """Annotated copy of `canvas`, optionally resized to `size` (width, height) first."""
+    """Annotated copy of `canvas`, optionally resized to `size` (width, height) first.
+
+    `hud=False` omits the clock and disclaimer, for layouts that draw them elsewhere.
+    """
     image = canvas.copy()
     scale = 1.0
     if size is not None and (image.shape[1], image.shape[0]) != size:
@@ -171,5 +175,6 @@ def render_source_frame(
         image = cv2.resize(image, size, interpolation=cv2.INTER_AREA)
     draw_scene(image, proposals, scale=scale)
     draw_tracks(image, observations, output, scale=scale)
-    draw_hud(image, time_s)
+    if hud:
+        draw_hud(image, time_s)
     return image

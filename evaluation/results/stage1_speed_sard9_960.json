@@ -1,0 +1,62 @@
+[
+  {
+    "model": "yolo26n.pt",
+    "image_size": 960,
+    "batch": 4,
+    "ms_per_frame": 11.5,
+    "detector_s_for_120s_clip": 20.7,
+    "share_of_fr1_budget": 0.07,
+    "people_per_frame": 4.64,
+    "people_under_100px_per_frame": 0.95,
+    "peak_gpu_mb": 169,
+    "device": "cuda:0"
+  },
+  {
+    "model": "yolo26s.pt",
+    "image_size": 960,
+    "batch": 4,
+    "ms_per_frame": 18.6,
+    "detector_s_for_120s_clip": 33.5,
+    "share_of_fr1_budget": 0.11,
+    "people_per_frame": 7.41,
+    "people_under_100px_per_frame": 2.66,
+    "peak_gpu_mb": 307,
+    "device": "cuda:0"
+  },
+  {
+    "model": "yolo26m.pt",
+    "image_size": 960,
+    "batch": 4,
+    "ms_per_frame": 38.6,
+    "detector_s_for_120s_clip": 69.5,
+    "share_of_fr1_budget": 0.23,
+    "people_per_frame": 8.93,
+    "people_under_100px_per_frame": 4.15,
+    "peak_gpu_mb": 543,
+    "device": "cuda:0"
+  },
+  {
+    "model": "yolo26l.pt",
+    "image_size": 960,
+    "batch": 4,
+    "ms_per_frame": 48.3,
+    "detector_s_for_120s_clip": 86.9,
+    "share_of_fr1_budget": 0.29,
+    "people_per_frame": 10.72,
+    "people_under_100px_per_frame": 5.47,
+    "peak_gpu_mb": 710,
+    "device": "cuda:0"
+  },
+  {
+    "model": "yolo26x.pt",
+    "image_size": 960,
+    "batch": 4,
+    "ms_per_frame": 91.8,
+    "detector_s_for_120s_clip": 165.2,
+    "share_of_fr1_budget": 0.55,
+    "people_per_frame": 12,
+    "people_under_100px_per_frame": 6.72,
+    "peak_gpu_mb": 991,
+    "device": "cuda:0"
+  }
+]

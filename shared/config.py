@@ -115,6 +115,8 @@ class RenderConfig(StrictModel):
     pane_height: int
     crf: int
     preset: str
+    video_codec: str
+    proxy_height: int
 
 
 class RuntimeConfig(StrictModel):

@@ -86,10 +86,14 @@ class Letterbox:
                 "FRAME_SIZE_CHANGED",
                 f"frame is {width}x{height}, expected {self.source_width}x{self.source_height}",
             )
-        interpolation = cv2.INTER_AREA if self.resized_width < width else cv2.INTER_LINEAR
+        # Area averaging only pays for itself on strong downscales; linear is ~3x faster.
+        strong_downscale = self.resized_width < width / 2
+        interpolation = cv2.INTER_AREA if strong_downscale else cv2.INTER_LINEAR
         resized = cv2.resize(
             image, (self.resized_width, self.resized_height), interpolation=interpolation
         )
+        if (self.resized_width, self.resized_height) == (self.canvas_width, self.canvas_height):
+            return resized
         return cv2.copyMakeBorder(
             resized,
             self.offset_y,
@@ -152,7 +156,9 @@ class FrameSource:
         failures = 0
         try:
             while True:
-                ok, image = capture.read()
+                # grab() demuxes and decodes; retrieve() (colour conversion, ~5 ms at
+                # 1440p) is only paid for frames that are kept.
+                ok = capture.grab()
                 if not ok:
                     failures += 1
                     remaining = self.expected_frames is None or (
@@ -168,6 +174,10 @@ class FrameSource:
                 last_time = time_s
                 bucket = math.floor(time_s * self.target_fps + 1e-6)
                 if bucket <= last_bucket:
+                    continue
+                ok, image = capture.retrieve()
+                if not ok:
+                    self.warnings.append(f"frame {source_index} could not be converted")
                     continue
                 last_bucket = bucket
                 if self.letterbox is None:

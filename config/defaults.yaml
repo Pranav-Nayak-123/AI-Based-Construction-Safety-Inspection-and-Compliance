@@ -13,7 +13,7 @@ intake:
 stage1:
   model_path: artifacts/models/stage1/best.pt
   # Used until a fine-tuned checkpoint is promoted to model_path.
-  pretrained_fallback: artifacts/models/pretrained/yolo26s.pt
+  pretrained_fallback: artifacts/models/pretrained/yolo26l.pt
   class_map: coco_pretrained
   machinery_classes: [machinery, vehicle]
   image_size: 960
@@ -99,7 +99,12 @@ render:
   pane_width: 940
   pane_height: 529
   crf: 18
-  preset: medium
+  # libx264 only. veryfast keeps a 2-minute clip inside FR-1's 5-minute budget on a
+  # laptop CPU; medium is ~2x slower for a slightly smaller file.
+  preset: veryfast
+  # auto → NVIDIA NVENC, then Intel Quick Sync, whichever works here; else libx264.
+  video_codec: auto
+  proxy_height: 720
 
 runtime:
   processing_checkpoint_frames: 250
