@@ -92,7 +92,7 @@ class Stage1Detector:
             max_det=self.config.maximum_detections,
             classes=self._keep,
             device=self.device,
-            half=False,  # GTX 16xx and MPS are unreliable in fp16
+            quantize=32,  # fp32: GTX 16xx and MPS are unreliable in fp16
             verbose=False,
         )
         batch: list[list[Detection]] = []
