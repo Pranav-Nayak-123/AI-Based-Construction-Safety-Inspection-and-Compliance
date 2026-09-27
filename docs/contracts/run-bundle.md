@@ -41,6 +41,21 @@ Each `IncidentRecord` is a *confirmed* alert (condition persisted past its debou
 | `distance`, `relative_band` | R4/R5 only: WH interval and band at the closest approach |
 | `helmet`, `vest` | Smoothed PPE state at the evidence frame |
 | `adjudication_candidate` | `true` → queue `evidence_crop_path` for L1 (PPE unknown or within 0.10 of the floor) |
+| `narration` | Optional (`null` until `safety-llm narrate <run_dir>` runs). `summary`, `caveat`, `action` plus `source`: `model` when the fine-tuned narrator's text passed all eight L5 checks, `template` when it fell back; `failed_checks` names the checks a rejected reply failed. Shown instead of `observation_text` only when `source` is `model` |
+
+Narration never changes an incident: rule, severity, references and action code stay the
+catalogue's. The narrator step also records `model_ids.narrator`,
+`prompt_versions.narration` and `diagnostics.narration` (model vs template counts, failed
+checks, seconds) in the manifest.
+
+## Diagnostics worth reading (`run_manifest.json → diagnostics`)
+
+| Key | Meaning |
+|---|---|
+| `camera_fits.<shot>` | Camera calibrated from the workers themselves: `accepted`, `parameters` (`focal_px`, `tilt_rad`, `roll_rad`, `height_wh`), `observations`, `tracks`, `inlier_ratio`, `relative_rms` (worker-height error), `bootstrap_replicates` |
+| `geometry_gate` | Whether distances are supported at all for this feed (residual camera drift in WH) |
+| `pass1_seconds` | Detector, tracker and PPE time; `hard_hat_overrides` counts PPE votes vetoed by a detected hard hat |
+| `narration` | See above |
 
 ## Rule coverage (`run_manifest.json → rule_coverage`)
 
