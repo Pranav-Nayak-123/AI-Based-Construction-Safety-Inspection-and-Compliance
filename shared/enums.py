@@ -67,3 +67,16 @@ class JobStage(StrEnum):
     MAPPING_RULES = "mapping_rules"
     RENDER = "render"
     PUBLISH = "publish"
+
+
+class AlertState(StrEnum):
+    """Temporal state of one (rule, subject) pair inside the rule engine (v7 §40.1)."""
+
+    CLEAR = "clear"
+    PENDING_ALERT = "pending_alert"
+    ALERT = "alert"
+    PENDING_RESOLUTION = "pending_resolution"
+    COOLDOWN = "cooldown"
+
+
+PERSON_CLASS = "person"

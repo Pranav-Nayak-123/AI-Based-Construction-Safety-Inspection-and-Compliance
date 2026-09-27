@@ -100,6 +100,7 @@ class RulesConfig(StrictModel):
     r4_near_max_wh: float
     r4_caution_max_wh: float
     r5_edge_max_wh: float
+    adjudication_margin: float
 
 
 class RenderConfig(StrictModel):

@@ -4,7 +4,8 @@ import json
 
 import pytest
 
-from pipeline.rules.engine import evaluate_fake_rules
+from jobs.pipeline_job import _fake_tracks, run_rules_on_synthetic_tracks
+from shared.config import load_config
 from shared.coordinates import Box2, DistanceInterval, Point2
 from shared.enums import (
     CoordinateSpace,
@@ -49,18 +50,25 @@ def test_metric_distance_fields_absent() -> None:
     assert "lower_wh" in payload
 
 
-def test_fake_rules_cover_all_ids() -> None:
-    coverage, incidents, results = evaluate_fake_rules(run_id="run-x", shot_id="shot-0")
-    assert [c.rule_id for c in coverage] == list(RuleId)
-    assert len(incidents) == 1
-    assert incidents[0].rule_id is RuleId.R1
-    assert incidents[0].status is RuleStatus.EVALUATED_ALERT
-    assert len(results) == 5
-    IncidentRecord.model_validate(incidents[0].model_dump())
+def test_synthetic_tracks_run_through_the_real_engine() -> None:
+    result = run_rules_on_synthetic_tracks(
+        _fake_tracks("shot-0", 3.0), run_id="run-x", config=load_config()
+    )
+    coverage = {entry.rule_id: entry for entry in result.coverage}
+    assert list(coverage) == list(RuleId)
+    assert len(result.incidents) == 1
+    assert result.incidents[0].rule_id is RuleId.R1
+    assert result.incidents[0].status is RuleStatus.EVALUATED_ALERT
+    assert coverage[RuleId.R2].status is RuleStatus.EVALUATED_CLEAR
+    for rule_id in (RuleId.R3, RuleId.R4, RuleId.R5):
+        assert coverage[rule_id].status is RuleStatus.UNSUPPORTED
+    IncidentRecord.model_validate(result.incidents[0].model_dump())
 
 
 def test_incident_json_serializable() -> None:
-    _, incidents, _ = evaluate_fake_rules(run_id="run-y", shot_id="shot-0")
-    raw = json.dumps(incidents[0].model_dump(mode="json"))
+    result = run_rules_on_synthetic_tracks(
+        _fake_tracks("shot-0", 3.0), run_id="run-y", config=load_config()
+    )
+    raw = json.dumps(result.incidents[0].model_dump(mode="json"))
     assert "R1" in raw
     assert "distance_m" not in raw

@@ -10,6 +10,10 @@ class RuleCoverageEntry(StrictModel):
     rule_id: RuleId
     status: RuleStatus
     reason_code: str
+    # Subject-frame observations per status, so a mostly-inconclusive rule is visible
+    # even when its summary status is evaluated_clear.
+    status_counts: dict[RuleStatus, int] = Field(default_factory=dict)
+    incident_count: int = Field(default=0, ge=0)
 
 
 class PassTiming(StrictModel):

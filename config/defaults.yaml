@@ -83,6 +83,8 @@ rules:
   r4_near_max_wh: 1.5
   r4_caution_max_wh: 3.0
   r5_edge_max_wh: 0.8
+  # PPE confidence within this margin above the floor is queued for L1 adjudication.
+  adjudication_margin: 0.10
 
 render:
   output_width: 1920

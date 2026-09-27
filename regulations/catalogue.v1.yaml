@@ -1,0 +1,83 @@
+# Deterministic rule catalogue (v7 §41). Immutable at runtime; its canonical SHA-256 is
+# stamped on every incident. The rule engine selects title, severity, basis, action and
+# references from here — the LLM layers (L2/L4) may reword but never select or alter them.
+#
+# Template variables: {track_id} {duration_s} {zone_label} {machine_label}
+#
+# reference_status stays "unverified" until each reference records its authoritative
+# source URL, retrieval date, document SHA-256 and page/section anchor (v7 §41).
+catalogue_version: 1
+reference_status: unverified
+rules:
+  - rule_id: R1
+    title: Apparent missing helmet
+    basis: visual
+    severity: high
+    alert_reason_code: persistent_no_helmet
+    observation_template: >-
+      Worker {track_id} was repeatedly observed without a visible helmet for {duration_s}s.
+    action_code: VERIFY_HELMET
+    action_template: >-
+      Pause the task and verify that suitable head protection is being worn.
+    references:
+      - BOCW Rule 54
+      - BOCW Rule 46(1)
+
+  - rule_id: R2
+    title: Apparent missing hi-vis in movement area
+    basis: heuristic
+    severity: medium
+    alert_reason_code: persistent_no_vest_in_movement_area
+    observation_template: >-
+      Worker {track_id} may lack visible hi-vis clothing in a movement area for {duration_s}s.
+    action_code: VERIFY_HI_VIS
+    action_template: >-
+      Verify conspicuity requirements before work continues in the movement area.
+    references: []
+    contextual_references:
+      road_work:
+        - BOCW Rule 48(1)
+        - BOCW Rule 92(c)
+
+  - rule_id: R3
+    title: Restricted-zone intrusion
+    basis: heuristic
+    severity: high
+    alert_reason_code: restricted_zone_entry
+    observation_template: >-
+      Worker {track_id} entered restricted zone "{zone_label}" for {duration_s}s.
+    action_code: CLEAR_RESTRICTED_ZONE
+    action_template: >-
+      Stop entry and verify the exclusion boundary before resuming work.
+    references: []
+
+  - rule_id: R4
+    title: Approximate machinery proximity
+    basis: heuristic
+    severity: high
+    alert_reason_code: active_machine_near_band
+    observation_template: >-
+      Worker {track_id} remained in the near-machine band of {machine_label} for {duration_s}s.
+    action_code: VERIFY_PLANT_SEPARATION
+    action_template: >-
+      Pause movement and verify separation with the plant operator.
+    references:
+      - BOCW Rule 125(h)
+      - BOCW Rule 130
+
+  - rule_id: R5
+    title: Possible fall-edge exposure
+    basis: heuristic
+    severity: critical
+    alert_reason_code: visible_unguarded_edge
+    observation_template: >-
+      Worker {track_id} approached visibly unguarded or inadequately guarded edge
+      "{zone_label}" for {duration_s}s.
+    action_code: VERIFY_EDGE_PROTECTION
+    action_template: >-
+      Stop access and inspect edge protection before work resumes.
+    references:
+      - BOCW Rule 42(5)
+      - BOCW Rule 42(6)
+      - BOCW Rule 2(u)
+      - BOCW Rule 179

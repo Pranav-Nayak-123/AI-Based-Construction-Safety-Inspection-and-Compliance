@@ -8,7 +8,11 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-from pipeline.rules.engine import evaluate_fake_rules
+from pipeline.mapping.anchors import image_aligned_record
+from pipeline.output.bundle import write_model
+from pipeline.output.summaries import TrackSummaryBuilder
+from pipeline.rules.catalogue import load_catalogue
+from pipeline.rules.engine import EngineResult, RuleEngine
 from shared.config import AppConfig, load_config
 from shared.coordinates import Box2, Point2
 from shared.enums import (
@@ -18,8 +22,18 @@ from shared.enums import (
     ProcessingStatus,
     VestState,
 )
+from shared.identity import canonical_track_id
+from shared.schemas.bundle import (
+    INCIDENTS_FILE,
+    RUN_MANIFEST_FILE,
+    SCENE_FILE,
+    TRACKS_SUMMARY_FILE,
+    IncidentsFile,
+)
+from shared.schemas.frame import FeedCapabilities, FrameContext
 from shared.schemas.jobs import JobRecord
 from shared.schemas.run import InputVideoMeta, PassTiming, RunManifest
+from shared.schemas.scene import SceneCache
 from shared.schemas.tracks import HelmetRecord, Pass1TrackObservation, VestRecord
 
 
@@ -105,7 +119,7 @@ def _fake_tracks(shot_id: str, duration_s: float) -> list[Pass1TrackObservation]
                 frame_index=frame_index,
                 video_time_s=t,
                 track_id=1,
-                canonical_track_id=f"{shot_id}/person-1",
+                canonical_track_id=canonical_track_id(shot_id, 1),
                 object_class="person",
                 box_reference=Box2(
                     x1=100.0 + frame_index,
@@ -132,6 +146,55 @@ def _fake_tracks(shot_id: str, duration_s: float) -> list[Pass1TrackObservation]
             )
         )
     return observations
+
+
+def synthetic_frame_contexts(
+    tracks: list[Pass1TrackObservation], *, run_id: str
+) -> list[FrameContext]:
+    """Frame contexts for synthetic pass-one tracks.
+
+    The fake feed has PPE states but no stabilisation, scene state or relative plane, so
+    R1/R2 evaluate while R3–R5 honestly report `unsupported_for_feed`.
+    """
+    capabilities = FeedCapabilities(
+        person_detection=True,
+        ppe_classification=True,
+        scene_state=False,
+        relative_plane=False,
+    )
+    by_frame: dict[tuple[str, int], list[Pass1TrackObservation]] = {}
+    for observation in tracks:
+        by_frame.setdefault((observation.shot_id, observation.frame_index), []).append(observation)
+    return [
+        FrameContext(
+            run_id=run_id,
+            shot_id=shot_id,
+            frame_index=frame_index,
+            video_time_s=observations[0].video_time_s,
+            geometry_supported=False,
+            capabilities=capabilities,
+            tracks=tuple(image_aligned_record(obs) for obs in observations),
+        )
+        for (shot_id, frame_index), observations in sorted(
+            by_frame.items(), key=lambda item: item[1][0].video_time_s
+        )
+    ]
+
+
+def run_rules_on_synthetic_tracks(
+    tracks: list[Pass1TrackObservation],
+    *,
+    run_id: str,
+    config: AppConfig,
+    summary: TrackSummaryBuilder | None = None,
+) -> EngineResult:
+    """Feed synthetic pass-one tracks through the real R1–R5 engine."""
+    engine = RuleEngine(run_id=run_id, config=config.rules)
+    for context in synthetic_frame_contexts(tracks, run_id=run_id):
+        engine.evaluate_frame(context)
+        if summary is not None:
+            summary.add_frame(context)
+    return engine.finalize()
 
 
 def render_placeholder_mp4(
@@ -245,22 +308,39 @@ class FakePipelineJob:
         )
         self._write_json(self.run_dir / "job.json", job)
 
-        coverage, incidents, _results = evaluate_fake_rules(
-            run_id=self.run_id,
-            shot_id=self.shot_id,
+        summary = TrackSummaryBuilder(self.run_id)
+        rules = run_rules_on_synthetic_tracks(
+            tracks, run_id=self.run_id, config=self.config, summary=summary
         )
-        incidents_path = self.run_dir / "incidents.json"
-        self._write_json(
-            incidents_path,
-            {"schema_version": 1, "incidents": [i.model_dump(mode="json") for i in incidents]},
+        coverage, incidents = rules.coverage, rules.incidents
+        write_model(
+            self.run_dir / INCIDENTS_FILE,
+            IncidentsFile(
+                run_id=self.run_id,
+                catalogue_sha256=load_catalogue().sha256,
+                incidents=incidents,
+            ),
+        )
+        write_model(self.run_dir / TRACKS_SUMMARY_FILE, summary.build(incidents))
+        write_model(
+            self.run_dir / SCENE_FILE,
+            SceneCache(
+                cache_key="none",
+                video_sha256=input_meta.sha256,
+                shot_proposals={},
+                warnings=("Week-1 fake pipeline: no scene state; R3/R5 are unsupported.",),
+            ),
         )
         for incident in incidents:
-            evidence_file = self.run_dir / incident.evidence_path
-            evidence_file.parent.mkdir(parents=True, exist_ok=True)
-            evidence_file.write_text(
-                "placeholder evidence frame for synthetic R1 alert\n",
-                encoding="utf-8",
-            )
+            for relative in (incident.evidence_path, incident.evidence_crop_path):
+                if relative is None:
+                    continue
+                evidence_file = self.run_dir / relative
+                evidence_file.parent.mkdir(parents=True, exist_ok=True)
+                evidence_file.write_text(
+                    f"placeholder evidence for synthetic {incident.rule_id.value} alert\n",
+                    encoding="utf-8",
+                )
 
         job = job.model_copy(
             update={
@@ -273,9 +353,11 @@ class FakePipelineJob:
 
         video_path = self.run_dir / "safety_twin.mp4"
         artifacts: dict[str, str] = {
-            "incidents": "incidents.json",
+            "incidents": INCIDENTS_FILE,
+            "tracks_summary": TRACKS_SUMMARY_FILE,
+            "scene": SCENE_FILE,
             "tracks": "tracks.jsonl",
-            "run_manifest": "run_manifest.json",
+            "run_manifest": RUN_MANIFEST_FILE,
         }
         if self.skip_video:
             video_path.write_bytes(b"")
