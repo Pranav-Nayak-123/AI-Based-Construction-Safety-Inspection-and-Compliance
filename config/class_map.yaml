@@ -1,0 +1,15 @@
+# Maps each detector's native class names onto the stage-1 taxonomy (v7 §34.1).
+# A null target drops that class. With `ignore_unlisted: false`, a native class missing
+# from the map is an error rather than silently mapped.
+schema_version: 1
+taxonomy: [person, machinery, vehicle]
+maps:
+  # Pretrained COCO weights: the Phase 2 baseline. COCO has no construction machinery.
+  coco_pretrained:
+    ignore_unlisted: true
+    classes:
+      person: person
+      car: vehicle
+      truck: vehicle
+      bus: vehicle
+  # Frozen after profiling the Roboflow Construction Site Safety v27 export (Phase 3).

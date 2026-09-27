@@ -47,12 +47,23 @@ def index(url):
 
 
 def curl_range(url, start, length, dest):
+    """Fetch bytes [start, start+length) into dest, resuming a partial dest.
+
+    Resume is done by advancing the range start past the bytes already on disk and
+    appending. curl's own `-C -` cannot be combined with `-r` on every build (the
+    Windows system curl rejects it), so it is not used.
+    """
+    have = os.path.getsize(dest) if os.path.exists(dest) else 0
+    if have >= length:
+        return
     end = start + length - 1
-    subprocess.run(
-        ["curl", "-f", "-s", "--retry", "5", "--retry-delay", "3", "-C", "-",
-         "-r", f"{start}-{end}", url, "-o", dest],
-        check=True,
-    )
+    with open(dest, "ab") as out:
+        subprocess.run(
+            ["curl", "-f", "-s", "-L", "--retry", "5", "--retry-delay", "3",
+             "-r", f"{start + have}-{end}", url],
+            stdout=out,
+            check=True,
+        )
 
 
 def extract(url, name, meta, out_dir):

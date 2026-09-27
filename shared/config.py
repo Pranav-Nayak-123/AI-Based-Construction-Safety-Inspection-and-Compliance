@@ -22,10 +22,14 @@ class IntakeConfig(StrictModel):
 
 class Stage1Config(StrictModel):
     model_path: str
+    pretrained_fallback: str
+    class_map: str
+    machinery_classes: tuple[str, ...]
     image_size: int
     confidence: float
     iou: float
     maximum_detections: int
+    batch_size: int
     device: str
 
 

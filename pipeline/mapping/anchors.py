@@ -5,23 +5,32 @@ from __future__ import annotations
 from shared.schemas.tracks import MappedTrackRecord, Pass1TrackObservation
 
 IMAGE_ALIGNED = "image_aligned"
+# Foot-point jitter of a detector box bottom is a few percent of the person's height.
+ANCHOR_SIGMA_FRACTION_OF_HEIGHT = 0.03
+MINIMUM_ANCHOR_SIGMA_PX = 2.0
 
 
 def observation_key(observation: Pass1TrackObservation) -> str:
     return f"{observation.shot_id}:{observation.frame_index}:{observation.track_id}"
 
 
+def default_anchor_sigma_px(observation: Pass1TrackObservation) -> float:
+    height = observation.box_reference.height()
+    return max(MINIMUM_ANCHOR_SIGMA_PX, ANCHOR_SIGMA_FRACTION_OF_HEIGHT * height)
+
+
 def image_aligned_record(
     observation: Pass1TrackObservation,
     *,
-    anchor_sigma_px: float = 2.0,
+    anchor_sigma_px: float | None = None,
 ) -> MappedTrackRecord:
     """Map a pass-one observation without a relative plane.
 
     The anchor stays in reference pixels and no relative position is claimed, so the
     distance rules (R4/R5) that need the plane report `inconclusive` for this track.
     """
-    variance = anchor_sigma_px**2
+    sigma = anchor_sigma_px if anchor_sigma_px is not None else default_anchor_sigma_px(observation)
+    variance = sigma**2
     return MappedTrackRecord(
         shot_id=observation.shot_id,
         frame_index=observation.frame_index,

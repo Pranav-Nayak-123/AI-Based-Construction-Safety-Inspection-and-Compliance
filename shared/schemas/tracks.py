@@ -30,6 +30,10 @@ class Pass1TrackObservation(StrictModel):
     anchor_reference: Point2
     helmet: HelmetRecord | None = None
     vest: VestRecord | None = None
+    # Detector confidence of the matched box, and the box on the oriented canvas for
+    # drawing overlays on source frames (equal to box_reference for a fixed camera).
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    box_oriented: Box2 | None = None
 
 
 class MappedTrackRecord(StrictModel):

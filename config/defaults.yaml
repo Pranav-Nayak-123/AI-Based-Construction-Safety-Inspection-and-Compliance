@@ -12,11 +12,17 @@ intake:
 
 stage1:
   model_path: artifacts/models/stage1/best.pt
+  # Used until a fine-tuned checkpoint is promoted to model_path.
+  pretrained_fallback: artifacts/models/pretrained/yolo26s.pt
+  class_map: coco_pretrained
+  machinery_classes: [machinery, vehicle]
   image_size: 960
   confidence: 0.20
   iou: 0.60
   maximum_detections: 200
-  device: mps
+  batch_size: 4
+  # auto → cuda, then mps, then cpu.
+  device: auto
 
 tracker:
   type: bytetrack
