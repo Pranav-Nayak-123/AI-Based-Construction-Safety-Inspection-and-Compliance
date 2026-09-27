@@ -3,7 +3,7 @@ from __future__ import annotations
 from pydantic import Field
 
 from shared.coordinates import Point2, StrictModel
-from shared.enums import OperatingState
+from shared.enums import CoordinateSpace, OperatingState
 
 
 class VerticalObservation(StrictModel):
@@ -66,3 +66,25 @@ class MachineryFootprintRecord(StrictModel):
     covariance: list[list[float]]
     valid: bool
     reason_code: str
+
+
+class TransformRecord(StrictModel):
+    """One coordinate-space transform in the ledger (v7 §31.3).
+
+    Homogeneous column vectors, ``p' ~ H p``; matrices serialised row-major.
+    """
+
+    transform_id: str
+    frame_index: int | None
+    source_space: CoordinateSpace
+    destination_space: CoordinateSpace
+    kind: str
+    forward_3x3: list[list[float]] | None
+    inverse_3x3: list[list[float]] | None
+    valid: bool
+    interpolated: bool = False
+    residual_rms_px: float | None = None
+    inlier_count: int | None = None
+    inlier_ratio: float | None = None
+    reason_code: str = "ok"
+    implementation_version: str
