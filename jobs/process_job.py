@@ -72,6 +72,16 @@ DRIFT_SAMPLES = 24
 Reporter = Callable[[str], None]
 
 
+def _on_battery() -> bool:
+    """Laptops cap clocks on battery: the GTX 1660 Ti runs detection about 3x slower."""
+    try:
+        import psutil  # installed with the vision stack
+    except ImportError:
+        return False
+    battery = psutil.sensors_battery()
+    return battery is not None and not battery.power_plugged
+
+
 def _now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
@@ -146,6 +156,7 @@ class ProcessJob:
         self.warnings: list[str] = []
         self.model_ids: dict[str, str] = {}
         self.plane_fits: dict[str, PlaneFit] = {}
+        self.on_battery = False
 
     def run(self) -> RunManifest:
         if self.run_dir.exists():
@@ -154,6 +165,12 @@ class ProcessJob:
         self.work_dir.mkdir(parents=True, exist_ok=True)
         created_at = _now()
         timer = _Timer([])
+        self.on_battery = _on_battery()
+        if self.on_battery:
+            self.warnings.append(
+                "processed on battery power: GPU/CPU clocks are capped, so stage timings are "
+                "not representative of FR-1 performance"
+            )
 
         with timer.stage(JobStage.INTAKE):
             metadata = probe_video(self.video)
@@ -454,6 +471,7 @@ class ProcessJob:
             },
             diagnostics={
                 "camera_mode": mode.value,
+                "on_battery": self.on_battery,
                 "drift_peak_px": drift.peak_displacement_px,
                 "drift_peak_fraction": drift.peak_fraction,
                 "geometry_gate": gate.model_dump(mode="json"),

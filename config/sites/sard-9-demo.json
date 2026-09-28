@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "camera_id": "sard-9-demo",
+  "canvas_size": [
+    1920,
+    1080
+  ],
+  "reference_image": "sard-9-demo.jpg",
+  "notes": "SYNTHETIC demo zones for SARD complementary clip 9 (data/external/sard/9.mp4). The zone and edge do not exist on that site; they exercise R3/R5 for demos only and must never be used for precision/recall claims. Reference frame from SARD (Zenodo, CC-BY-4.0).",
+  "zones": [
+    {
+      "zone_id": "demo-exclusion-zone-synthetic",
+      "proposal_type": "restricted_zone",
+      "label": "Demo exclusion zone (synthetic)",
+      "points": [
+        [
+          600.0,
+          560.0
+        ],
+        [
+          1060.0,
+          560.0
+        ],
+        [
+          1110.0,
+          800.0
+        ],
+        [
+          560.0,
+          800.0
+        ]
+      ],
+      "road_work": null,
+      "visible_drop_or_open_side": null,
+      "protection_visibility": null,
+      "protection_state": null
+    },
+    {
+      "zone_id": "demo-formwork-edge-synthetic",
+      "proposal_type": "open_edge",
+      "label": "Demo formwork edge (synthetic)",
+      "points": [
+        [
+          880.0,
+          900.0
+        ],
+        [
+          1500.0,
+          880.0
+        ]
+      ],
+      "road_work": null,
+      "visible_drop_or_open_side": true,
+      "protection_visibility": "sufficient",
+      "protection_state": "unguarded_or_inadequate"
+    }
+  ]
+}
