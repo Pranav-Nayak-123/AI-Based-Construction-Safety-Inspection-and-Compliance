@@ -53,6 +53,7 @@ from evaluation.reviews import allowed_reviewers, fetch_supabase, summarize
 from llm.assistant.chat import RiskAssistant
 from llm.assistant.providers import ProviderError, from_env
 from pipeline.output.run_bundle import RunBundle
+from pipeline.report import brand
 from shared.schemas.bundle import REPORT_FILE, RUN_MANIFEST_FILE
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -260,7 +261,7 @@ async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(
-    title="Construction Safety Twin",
+    title="Groundtruth API",
     description="Published site-safety runs, their risk registers and a grounded chatbot.",
     version="0.3.0",
     lifespan=_lifespan,
@@ -529,7 +530,8 @@ FONTS = (
 
 GALLERY = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Safety Twin · construction safety from CCTV</title>
+<title>Groundtruth · construction safety from CCTV</title>
+<link rel="icon" href="{favicon}">
 <meta name="description" content="Construction CCTV turned into hazard incidents, a 3D digital twin, a risk register and a cited safety assistant.">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="{fonts}">
@@ -551,9 +553,8 @@ h1, h2, h3 { font-family:var(--display); letter-spacing:-.02em; margin:0; }
   backdrop-filter:saturate(1.4) blur(12px); border-bottom:1px solid var(--line); }
 .nav .wrap { display:flex; align-items:center; gap:22px; height:62px; }
 .logo { display:flex; align-items:center; gap:10px; color:var(--text); font-family:var(--display); font-weight:700; font-size:1.05rem; }
-.mark { width:30px; height:30px; border-radius:8px; position:relative; overflow:hidden;
-  background:repeating-linear-gradient(135deg, var(--hazard) 0 5px, #15171b 5px 10px); }
-.mark::after { content:""; position:absolute; inset:7px; border-radius:5px; background:#15171b url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23f5b301' stroke-width='2.4' stroke-linejoin='round'%3E%3Cpath d='M12 3 4 7.5v9L12 21l8-4.5v-9z'/%3E%3Cpath d='M4 7.5 12 12l8-4.5M12 12v9'/%3E%3C/svg%3E") center/12px no-repeat; }
+.logo-mark { display:block; border-radius:8px; box-shadow:0 0 0 1px var(--line-2); }
+.wordmark { font-size:1.12rem; letter-spacing:-.03em; } .wordmark b { font-weight:700; } .wordmark span { font-weight:400; color:var(--text-2); }
 .nav .links { margin-left:auto; display:flex; gap:20px; align-items:center; font-size:.9rem; }
 .nav .links a { color:var(--text-2); } .nav .links a:hover { color:var(--text); }
 .btn { display:inline-flex; align-items:center; gap:8px; border-radius:10px; padding:10px 16px; font-weight:600; font-size:.92rem;
@@ -647,7 +648,7 @@ footer .links { margin-left:auto; display:flex; gap:18px; } footer a { color:var
 @media (prefers-reduced-motion: reduce) { * { transition:none !important; } .shot { transform:none; } }
 </style></head><body>
 <nav class="nav"><div class="wrap">
-  <a class="logo" href="/"><span class="mark" aria-hidden="true"></span>Safety Twin</a>
+  <a class="logo" href="/" aria-label="Groundtruth home">{wordmark}</a>
   <div class="links"><a class="hide-sm" href="#runs">Runs</a><a class="hide-sm" href="#how">How it works</a>
     <a class="hide-sm" href="/docs">API</a><a class="btn" href="{github}">GitHub</a></div>
 </div></nav>
@@ -698,7 +699,7 @@ footer .links { margin-left:auto; display:flex; gap:18px; } footer a { color:var
   </div>
 </section>
 </main>
-<footer><div class="wrap"><span>Safety Twin · CS3235 Team 5. Heuristic triage from video, not legal advice or certified measurement.</span>
+<footer><div class="wrap"><span><b>Groundtruth</b>: what is actually true on the ground, checked against the footage. CS3235 Team 5. Heuristic triage from video, not legal advice or certified measurement.</span>
 <div class="links"><a href="/docs">API</a><a href="/api/stats">Assistant monitoring</a><a href="/healthz">Status</a><a href="{github}">GitHub</a></div></div></footer>
 </body></html>"""
 
@@ -724,6 +725,8 @@ def gallery_page() -> str:
         )
     values = {
         "fonts": FONTS.replace("&", "&amp;"),
+        "favicon": brand.FAVICON,
+        "wordmark": brand.wordmark(30),
         "github": GITHUB,
         "runs_n": str(len(listed)),
         "minutes": f"{sum(r['duration_s'] for r in listed) / 60:.1f}",

@@ -44,14 +44,11 @@ h1, h2, h3 { font-family:var(--display); letter-spacing:-.01em; }
 .topbar { position:sticky; top:0; z-index:30; display:flex; align-items:center; gap:14px; height:60px; padding:0 20px;
   background:color-mix(in srgb, var(--surface) 86%, transparent); backdrop-filter:saturate(1.4) blur(12px);
   border-bottom:1px solid var(--line); }
-.brand { width:32px; height:32px; border-radius:9px; flex:none; position:relative; overflow:hidden;
-  background:repeating-linear-gradient(135deg, var(--hazard) 0 5px, #15171b 5px 10px);
-  box-shadow:0 0 0 1px rgba(0,0,0,.25) inset; }
-.brand::after { content:""; position:absolute; inset:7px; border-radius:5px; background:#15171b;
-  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23f5b301' stroke-width='2.4' stroke-linejoin='round'%3E%3Cpath d='M12 3 4 7.5v9L12 21l8-4.5v-9z'/%3E%3Cpath d='M4 7.5 12 12l8-4.5M12 12v9'/%3E%3C/svg%3E");
-  background-size:13px; background-position:center; background-repeat:no-repeat; }
+.brand { display:flex; align-items:center; gap:9px; flex:none; }
+.logo-mark { display:block; flex:none; border-radius:9px; box-shadow:0 0 0 1px var(--line-2); }
+.wordmark { font-family:var(--display); font-size:1.08rem; letter-spacing:-.03em; white-space:nowrap; }
+.wordmark b { font-weight:700; } .wordmark span { font-weight:400; color:var(--text-2); }
 .topbar .ident { min-width:0; display:flex; align-items:center; gap:12px; }
-.topbar .product { font-family:var(--display); font-weight:700; font-size:1rem; letter-spacing:-.01em; white-space:nowrap; }
 .topbar .divider { width:1px; height:22px; background:var(--line-2); }
 .topbar .title { font-weight:600; font-size:.92rem; line-height:1.2; white-space:nowrap; }
 .topbar .meta { color:var(--text-3); font-size:.76rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-family:var(--mono); }
@@ -282,7 +279,7 @@ body.chat-open .fab { display:none; }
   .cov-row { grid-template-columns:40px 1fr; } .cov-row > .stack, .cov-row > .chip-cell { grid-column:1 / -1; }
   .bars .row-b { grid-template-columns:1fr; }
   .topbar { padding:0 12px; gap:10px; }
-  .topbar .meta, .topbar .divider, .topbar .product, .topbar .hide-sm { display:none; }
+  .topbar .meta, .topbar .divider, .topbar .wordmark, .topbar .hide-sm { display:none; }
 }
 """
 

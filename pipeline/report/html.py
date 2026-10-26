@@ -28,8 +28,8 @@ from typing import Any
 
 from pipeline.output.facts import build_facts
 from pipeline.output.run_bundle import RunBundle
+from pipeline.report import brand, risk_html, twin_viewer
 from pipeline.report import insights_html as v3
-from pipeline.report import risk_html, twin_viewer
 from pipeline.report.assets import SCRIPT, STYLE
 from pipeline.rules.catalogue import load_catalogue
 from shared.enums import RuleId, RuleStatus
@@ -847,13 +847,14 @@ def render_report(
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{escape(Path(source.path).name)} · Safety Twin</title>
+<title>{escape(Path(source.path).name)} · {brand.NAME}</title>
+<link rel="icon" href="{brand.FAVICON}">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="{FONTS}">
 <style>{STYLE}{twin_viewer.STYLE}{risk_html.STYLE}</style></head>
 <body data-run="{escape(manifest.run_id)}">
-<header class="topbar"><div class="ident"><div class="brand" aria-hidden="true"></div>
-<span class="product">Safety Twin</span><span class="divider" aria-hidden="true"></span>
+<header class="topbar"><div class="ident"><span class="brand" title="{brand.NAME}">{brand.wordmark(30)}</span>
+<span class="divider" aria-hidden="true"></span>
 <div style="min-width:0"><div class="title">{escape(Path(source.path).name)}</div><div class="meta">{meta}</div></div></div>
 <div class="spacer"></div>
 <a class="back" href="/" data-hosted hidden>← All runs</a>
