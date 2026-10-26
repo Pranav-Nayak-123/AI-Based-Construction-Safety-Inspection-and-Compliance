@@ -85,6 +85,8 @@ def build_facts(bundle: RunBundle) -> list[Fact]:
         )
     ordered = sorted(bundle.incidents, key=lambda i: (i.first_seen_s, i.incident_id))
     facts += [_incident(bundle, incident, short[incident.incident_id]) for incident in ordered]
+    facts += _tallies(bundle, short)
+    facts += _timeline(bundle, short)
     facts += _workers(bundle, short)
     facts += _areas(bundle)
     facts.append(_limits(bundle))
@@ -141,7 +143,7 @@ def _risk(row: RiskRow, short: dict[str, str]) -> Fact:
         brief=(
             f"{row.rule_id.value} {row.title}: {row.band} risk ({row.rating}/25). {row.why} "
             f"{row.workers_exposed} workers exposed for {row.exposure_s:.1f} worker-seconds."
-            f"{where}"
+            f"{where}{'' if row.incidents else ' No confirmed incident.'}"
         ),
     )
 
@@ -191,19 +193,152 @@ def _incident(bundle: RunBundle, incident: IncidentRecord, short: str) -> Fact:
     )
 
 
-def _workers(bundle: RunBundle, short: dict[str, str]) -> list[Fact]:
-    if not bundle.insights:
+def _length(bundle: RunBundle, incident: IncidentRecord) -> float:
+    end = incident.resolved_at_s if incident.resolved_at_s is not None else bundle.duration_s
+    return end - incident.first_seen_s
+
+
+def _subject(incident: IncidentRecord) -> str:
+    label = display_track_label(incident.canonical_track_id or "")
+    return f"region {label}" if incident.rule_id is RuleId.R8 else f"worker {label}"
+
+
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def _tallies(bundle: RunBundle, short: dict[str, str]) -> list[Fact]:
+    """Counts per rule, so the model quotes a number instead of counting incidents itself."""
+    facts = []
+    for rule_id in RuleId:
+        found = sorted(
+            (i for i in bundle.incidents if i.rule_id is rule_id),
+            key=lambda i: (i.first_seen_s, i.incident_id),
+        )
+        if not found:
+            continue
+        workers = sorted(
+            {display_track_label(i.canonical_track_id or "") for i in found}, key=_label_key
+        )
+        longest = max(found, key=lambda i: _length(bundle, i))
+        noun = "regions" if rule_id is RuleId.R8 else "different workers"
+        facts.append(
+            Fact(
+                id=f"COUNT-{rule_id.value}",
+                kind="tally",
+                rule=rule_id,
+                workers=tuple(workers) if rule_id is not RuleId.R8 else (),
+                text=(
+                    f"{rule_id.value} {_title(bundle, rule_id)}: "
+                    f"{_plural(len(found), 'confirmed incident')} involving {len(workers)} {noun} "
+                    f"({'workers' if rule_id is not RuleId.R8 else 'regions'} "
+                    f"{', '.join(workers)}). Incidents: "
+                    f"{' '.join(short[i.incident_id] for i in found)}. First started at "
+                    f"{clock(found[0].first_seen_s)} ({short[found[0].incident_id]}, "
+                    f"{_subject(found[0])}); last started at {clock(found[-1].first_seen_s)} "
+                    f"({short[found[-1].incident_id]}, {_subject(found[-1])}); longest "
+                    f"{short[longest.incident_id]} ({_subject(longest)}, "
+                    f"{_length(bundle, longest):.1f} s)."
+                ),
+                keywords=RULE_WORDS[rule_id] + " how many count number total",
+            )
+        )
+    return facts
+
+
+def _timeline(bundle: RunBundle, short: dict[str, str]) -> list[Fact]:
+    """When incidents started, the longest ones and the evidence grades, across all rules."""
+    found = sorted(bundle.incidents, key=lambda i: (i.first_seen_s, i.incident_id))
+    if not found:
         return []
+    minutes = []
+    for start in range(0, int(bundle.duration_s) + 1, 60):
+        end = min(start + 60, bundle.duration_s)
+        inside = [i for i in found if start <= i.first_seen_s < start + 60]
+        if start < bundle.duration_s:
+            ids = " ".join(short[i.incident_id] for i in inside)
+            minutes.append(
+                f"{clock(start)}–{clock(end)}: {len(inside)}{' (' + ids + ')' if ids else ''}"
+            )
+    longest = sorted(found, key=lambda i: -_length(bundle, i))[:3]
+    grades: dict[str, list[str]] = {}
+    for incident in found:
+        grades.setdefault(incident.evidence_quality or "ungraded", []).append(
+            short[incident.incident_id]
+        )
+    return [
+        Fact(
+            id="TIMELINE",
+            kind="timeline",
+            text=(
+                f"Confirmed incidents by start time (all rules, {len(found)} in total): "
+                + "; ".join(minutes)
+                + f". First started at {clock(found[0].first_seen_s)} ("
+                + ", ".join(
+                    f"{short[i.incident_id]} {i.rule_id.value} {_subject(i)}"
+                    for i in found
+                    if i.first_seen_s == found[0].first_seen_s
+                )
+                + f"); last started at {clock(found[-1].first_seen_s)} "
+                f"({short[found[-1].incident_id]} {found[-1].rule_id.value} "
+                f"{_subject(found[-1])}). "
+                "Longest: "
+                + ", ".join(
+                    f"{short[i.incident_id]} {i.rule_id.value} {_subject(i)} "
+                    f"{_length(bundle, i):.1f} s"
+                    for i in longest
+                )
+                + "."
+            ),
+            keywords="when time first last earliest latest longest timeline minute start began",
+        ),
+        Fact(
+            id="EVIDENCE",
+            kind="timeline",
+            text=(
+                f"Evidence quality of the {len(found)} confirmed incidents: "
+                + "; ".join(
+                    f"{grade} {len(ids)} ({' '.join(ids)})" for grade, ids in sorted(grades.items())
+                )
+                + "."
+            ),
+            keywords="evidence quality weak strong moderate confidence how sure",
+        ),
+    ]
+
+
+def _label_key(label: str) -> tuple[int, str]:
+    return (int(label), "") if label.isdigit() else (1 << 30, label)
+
+
+def _workers(bundle: RunBundle, short: dict[str, str]) -> list[Fact]:
+    """A fact per worker with exposure or an incident; most exposed first."""
     by_worker: dict[str, list[IncidentRecord]] = {}
-    for incident in bundle.incidents:
+    for incident in sorted(bundle.incidents, key=lambda i: (i.first_seen_s, i.incident_id)):
         if incident.canonical_track_id and incident.rule_id is not RuleId.R8:
             by_worker.setdefault(incident.canonical_track_id, []).append(incident)
+
+    def incidents_text(found: list[IncidentRecord]) -> str:
+        if not found:
+            return "no confirmed incident"
+        listed = ", ".join(
+            f"{short[i.incident_id]} ({i.rule_id.value} {i.title}, from {clock(i.first_seen_s)})"
+            for i in found
+        )
+        rules = {i.rule_id.value for i in found}
+        return (
+            f"{_plural(len(found), 'confirmed incident')}: {listed}; "
+            f"no confirmed incident for rules other than {', '.join(sorted(rules))}"
+        )
+
     facts = []
-    for worker in bundle.insights.top_workers:
+    ranked: list[str] = []
+    top = bundle.insights.top_workers if bundle.insights else []
+    for worker in top:
         label = display_track_label(worker.canonical_track_id)
         rules = ", ".join(f"{rule} {seconds:.1f} s" for rule, seconds in worker.by_rule.items())
-        found = by_worker.get(worker.canonical_track_id, [])
-        cited = " ".join(short[i.incident_id] for i in found)
+        found = by_worker.pop(worker.canonical_track_id, [])
+        ranked.append(f"worker {label} {worker.exposure_s:.1f} s")
         facts.append(
             Fact(
                 id=f"W-{label}",
@@ -211,13 +346,123 @@ def _workers(bundle: RunBundle, short: dict[str, str]) -> list[Fact]:
                 workers=(label,),
                 text=(
                     f"Worker {label}: {worker.exposure_s:.1f} s in hazard conditions ({rules}); "
-                    f"{len(found)} confirmed incident{'s' if len(found) != 1 else ''}"
-                    f"{': ' + cited if cited else ''}."
+                    f"{incidents_text(found)}."
                 ),
                 keywords="worker person who most exposed",
             )
         )
+    for track, found in sorted(
+        by_worker.items(), key=lambda kv: _label_key(display_track_label(kv[0]))
+    ):
+        label = display_track_label(track)
+        facts.append(
+            Fact(
+                id=f"W-{label}",
+                kind="worker",
+                workers=(label,),
+                text=f"Worker {label}: {incidents_text(found)}.",
+                keywords="worker person who",
+            )
+        )
+    if ranked:
+        facts.insert(
+            0,
+            Fact(
+                id="EXPOSED",
+                kind="ranking",
+                text=(
+                    "Workers ranked by time in hazard conditions, most first: "
+                    + ", ".join(ranked)
+                    + "."
+                ),
+                keywords="most exposed worker who ranking top longest time hazard",
+            ),
+        )
     return facts
+
+
+# ---------------------------------------------------------------------- per-question facts
+
+UNIT = r"(s|secs?|seconds?|mins?|minutes?)"
+MOMENT = rf"(?:the\s+)?(?:(\d+):(\d{{2}}(?:\.\d+)?)|(\d+(?:\.\d+)?)\s*-?\s*{UNIT}\b)"
+
+
+def _seconds(match: re.Match[str], offset: int) -> float:
+    minutes, rest, amount, unit = match.group(offset, offset + 1, offset + 2, offset + 3)
+    if minutes is not None:
+        return int(minutes) * 60 + float(rest)
+    return float(amount) * (60 if unit.lower().startswith("m") else 1)
+
+
+def time_window(question: str, duration_s: float) -> tuple[float, float] | None:
+    """The span a question asks about ("first 30 seconds", "after 2:00", "between ...")."""
+    q = question.lower()
+    if m := re.search(rf"\bbetween\s+{MOMENT}\s+(?:and|to|-)\s+{MOMENT}", q):
+        return _seconds(m, 1), _seconds(m, 5)
+    if m := re.search(rf"\bfirst\s+{MOMENT}", q):
+        return 0.0, _seconds(m, 1)
+    if m := re.search(rf"\b(?:last|final)\s+{MOMENT}", q):
+        return max(duration_s - _seconds(m, 1), 0.0), duration_s
+    if m := re.search(rf"\b(?:after|since|from|past|beyond)\s+{MOMENT}", q):
+        return _seconds(m, 1), duration_s
+    if m := re.search(rf"\b(?:before|until|by|within)\s+{MOMENT}", q):
+        return 0.0, _seconds(m, 1)
+    return None
+
+
+def query_facts(bundle: RunBundle, facts: list[Fact], question: str) -> list[Fact]:
+    """Facts computed for this question: a time window's incidents, an unknown worker."""
+    extra: list[Fact] = []
+    short = incident_ids(bundle)
+    window = time_window(question, bundle.duration_s)
+    if window:
+        start, end = window
+        rules = rules_in(question)
+        found = sorted(
+            (
+                i
+                for i in bundle.incidents
+                if start <= i.first_seen_s < end and (not rules or i.rule_id in rules)
+            ),
+            key=lambda i: (i.first_seen_s, i.incident_id),
+        )
+        scope = " ".join(r.value for r in rules) + " " if rules else ""
+        workers = {display_track_label(i.canonical_track_id or "") for i in found}
+        listed = "; ".join(
+            f"{short[i.incident_id]} {i.rule_id.value} {_subject(i)} from {clock(i.first_seen_s)}"
+            for i in found
+        )
+        extra.append(
+            Fact(
+                id="Q-TIME",
+                kind="query",
+                workers=tuple(sorted(workers, key=_label_key)),
+                text=(
+                    f"Confirmed {scope}incidents that started between {clock(start)} and "
+                    f"{clock(end)}: {len(found)}"
+                    + (
+                        f", involving {_plural(len(workers), 'different worker')}: {listed}."
+                        if found
+                        else " (none)."
+                    )
+                ),
+            )
+        )
+    known = {w for fact in facts for w in fact.workers}
+    for label in dict.fromkeys(WORKER.findall(question)):
+        if label not in known:
+            extra.append(
+                Fact(
+                    id=f"Q-W{label}",
+                    kind="query",
+                    workers=(label,),
+                    text=(
+                        f"Worker {label}: no confirmed incident and no recorded hazard exposure "
+                        "in this clip (no such worker among those with incidents or exposure)."
+                    ),
+                )
+            )
+    return extra
 
 
 def _areas(bundle: RunBundle) -> list[Fact]:
@@ -260,17 +505,43 @@ def _limits(bundle: RunBundle) -> Fact:
 
 WORKER = re.compile(r"\bworker\s*#?\s*(\d+)", re.I)
 RULE = re.compile(r"\bR([1-8])\b", re.I)
-# Phrases that put a question about one rule (substring match on the lowered question).
+# Phrases that put a question about one rule (a word prefix: "helmet" matches "helmets",
+# but "edge" does not match "knowledge").
 INTENT = {
     RuleId.R1: ("helmet", "hard hat", "hardhat", "head protection", "headgear"),
     RuleId.R2: ("hi-vis", "high-vis", "high vis", "hi vis", "vest", "conspicu"),
-    RuleId.R3: ("restricted", "exclusion", "zone", "intrusion"),
+    RuleId.R3: ("restricted", "exclusion", "zone", "intrusion", "intruded"),
     RuleId.R4: ("machine", "excavator", "plant", "proximity", "vehicle"),
     RuleId.R5: ("edge", "fall protection", "guardrail", "opening"),
-    RuleId.R6: ("worker down", "lying", "collapse", "injur", "unconscious", "man down"),
+    RuleId.R6: (
+        "worker down",
+        "lying",
+        "collapse",
+        "injur",
+        "unconscious",
+        "man down",
+        "fell",
+        "fallen",
+        "fall down",
+        "falls down",
+    ),
     RuleId.R7: ("crane", "suspended", "hook", "lift", "load"),
     RuleId.R8: ("fire", "smoke", "flame", "burning"),
 }
+INTENT_RE = {
+    rule_id: re.compile(r"\b(" + "|".join(re.escape(p) for p in phrases) + ")", re.I)
+    for rule_id, phrases in INTENT.items()
+}
+COUNTING = re.compile(r"\b(how many|how much|number of|count|total)\b", re.I)
+TIMING = re.compile(
+    r"\b(when|first|last|earliest|latest|longest|shortest|start\w*|began|timeline|order)\b", re.I
+)
+EVIDENCE_WORDS = re.compile(r"\b(evidence|weak|strong|moderate)\b", re.I)
+FIXING = re.compile(
+    r"\b(fix\w*|priorit\w*|action\w*|recommend\w*|controls?|mitigat\w*|improve\w*|"
+    r"(should|must|can) (i|we) do|what to do|do (first|next|now))\b",
+    re.I,
+)
 # Questions the report offers as one-click prompts; answered offline from the register.
 SUGGESTED = (
     "What are the biggest risks on this site?",
@@ -283,8 +554,8 @@ SUGGESTED = (
 def rules_in(question: str) -> list[RuleId]:
     q = question.lower()
     found = [RuleId(f"R{n}") for n in RULE.findall(q)]
-    for rule_id, phrases in INTENT.items():
-        if rule_id not in found and any(phrase in q for phrase in phrases):
+    for rule_id, pattern in INTENT_RE.items():
+        if rule_id not in found and pattern.search(q):
             found.append(rule_id)
     return found[:2]
 
@@ -298,33 +569,41 @@ def register_answer(bundle: RunBundle, facts: list[Fact], question: str) -> tupl
     cited: list[Fact] = []
 
     def say(fact: Fact | None, text: str | None = None) -> None:
-        if fact is None:
+        if fact is None or fact in cited:
             return
         lines.append(f"- {text or fact.brief or fact.text} [{fact.id}]")
         cited.append(fact)
 
     worker = WORKER.search(question)
     rules = rules_in(question)
+    query = [f for f in facts if f.kind == "query"]
+    for fact in query:  # computed for this question: the most direct answer
+        say(fact)
     if worker:
         label = worker.group(1)
         found = [f for f in facts if label in f.workers and f.kind in ("worker", "incident")]
-        if not found:
-            lines.append(
-                f"- Worker {label} has no confirmed incident or recorded hazard exposure in "
-                "this clip [RUN]."
-            )
-            cited.append(by_id["RUN"])
         for fact in found[:6]:
             say(fact)
+    elif query:
+        pass
     elif rules:
         for rule_id in rules:
+            say(by_id.get(f"COUNT-{rule_id.value}"))
             say(
                 by_id.get(f"RISK-{rule_id.value}")
                 or by_id.get(f"NA-{rule_id.value}")
                 or by_id.get(f"CLEAR-{rule_id.value}")
             )
-            for fact in [f for f in facts if f.kind == "incident" and f.rule is rule_id][:4]:
-                say(fact)
+            if not COUNTING.search(q):
+                for fact in [f for f in facts if f.kind == "incident" and f.rule is rule_id][:4]:
+                    say(fact)
+    elif EVIDENCE_WORDS.search(q) and "EVIDENCE" in by_id:
+        say(by_id["EVIDENCE"])
+    elif TIMING.search(q) and not FIXING.search(q) and "TIMELINE" in by_id:
+        say(by_id["TIMELINE"])
+    elif COUNTING.search(q) and re.search(r"\b(incidents?|events?|alerts?|violations?)\b", q):
+        say(by_id["RUN"])
+        say(by_id.get("TIMELINE"))
     elif any(w in q for w in ("not check", "coverage", "miss", "blind", "not assess")):
         for fact in facts:
             if fact.kind == "not_assessed":
@@ -337,12 +616,13 @@ def register_answer(bundle: RunBundle, facts: list[Fact], question: str) -> tupl
             )
             cited.extend(clear)
     elif re.search(r"\b(which|who|most)\b.*\b(worker|exposed|exposure|people|person)", q):
+        say(by_id.get("EXPOSED"))
         ranked = [f for f in facts if f.kind == "worker"][:3]  # facts keep exposure order
         for fact in ranked or [by_id["RUN"]]:
             say(fact)
     elif re.search(r"\b(reliab\w*|accura\w*|trust\w*|sure|limit\w*|confiden\w*)\b", q):
         say(by_id["LIMITS"])
-    elif any(w in q for w in ("do ", "fix", "priorit", "action", "recommend", "control", "first")):
+    elif FIXING.search(q):
         for row in risk.rows[:3]:
             now = bundle.catalogue.rule(row.rule_id).action_template.strip()
             level, text = row.controls[0]
