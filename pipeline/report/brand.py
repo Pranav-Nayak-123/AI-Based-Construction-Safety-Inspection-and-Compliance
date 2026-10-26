@@ -1,22 +1,23 @@
-"""Groundtruth's mark, shared by the hosted site and every report.
+"""Ground Truth's mark, shared by the hosted site and every report.
 
-A white "G" (the camera's lens) and an amber "T" read together as GT. The T's stem drops
-onto a ground line, and the dot where the strokes meet is a worker placed on the ground
-plane: the system's job, finding what is true on the ground, hidden in its initials.
+A GT monogram in flat, mitred strokes on a charcoal tile. The off-white G is the camera's
+view of the site; the amber T is its crossbar and a plumb stem dropping onto the amber
+ground line, cutting a gap through the G's base on the way. The off-white dot standing on
+the ground line is a worker placed on the ground plane: the system's job, finding what is
+true on the ground, inside its initials.
 """
 
 from urllib.parse import quote
 
-NAME = "Groundtruth"
-AMBER = "#F7B32B"
+NAME = "Ground Truth"
+TILE, WHITE, AMBER = "#14171C", "#EEF1F5", "#F7B32B"
 _PATHS = (
-    '<rect width="64" height="64" rx="15" fill="#14171c"/>'
-    '<path d="M44.5 19A17 17 0 1 0 48 31.5" fill="none" stroke="#eef1f5" stroke-width="5.5" '
-    'stroke-linecap="round"/>'
-    f'<path d="M31 31.5h19M41 31.5v16.5" fill="none" stroke="{AMBER}" stroke-width="5.5" '
-    'stroke-linecap="round"/>'
-    f'<path d="M28 51.5h26" stroke="{AMBER}" stroke-width="3" stroke-linecap="round"/>'
-    '<circle cx="31" cy="31.5" r="3.6" fill="#eef1f5"/>'
+    f'<rect width="64" height="64" rx="14" fill="{TILE}"/>'
+    '<g fill="none" stroke-width="5.5" stroke-linecap="butt" stroke-linejoin="miter">'
+    f'<path d="M45 10H20l-6 6v18l6 6h15.5" stroke="{WHITE}"/>'
+    f'<path d="M29.5 28.5h21M40 28.5v22" stroke="{AMBER}"/>'
+    f'<path d="M11 52h42" stroke="{AMBER}" stroke-width="3"/></g>'
+    f'<circle cx="21.5" cy="47.6" r="2.8" fill="{WHITE}"/>'
 )
 
 
@@ -35,5 +36,5 @@ FAVICON = "data:image/svg+xml," + quote(
 
 
 def wordmark(size: int = 30) -> str:
-    """Mark plus name: "ground" strong, "truth" light, read as one word."""
-    return f'{logo(size)}<span class="wordmark"><b>ground</b><span>truth</span></span>'
+    """Mark plus the name in bold Space Grotesk capitals."""
+    return f'{logo(size)}<span class="wordmark">GROUND TRUTH</span>'

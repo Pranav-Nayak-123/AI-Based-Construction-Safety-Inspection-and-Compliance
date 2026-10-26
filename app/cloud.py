@@ -261,7 +261,7 @@ async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(
-    title="Groundtruth API",
+    title="Ground Truth API",
     description="Published site-safety runs, their risk registers and a grounded chatbot.",
     version="0.3.0",
     lifespan=_lifespan,
@@ -530,7 +530,7 @@ FONTS = (
 
 GALLERY = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Groundtruth · construction safety from CCTV</title>
+<title>Ground Truth · construction safety from CCTV</title>
 <link rel="icon" href="{favicon}">
 <meta name="description" content="Construction CCTV turned into hazard incidents, a 3D digital twin, a risk register and a cited safety assistant.">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -553,8 +553,8 @@ h1, h2, h3 { font-family:var(--display); letter-spacing:-.02em; margin:0; }
   backdrop-filter:saturate(1.4) blur(12px); border-bottom:1px solid var(--line); }
 .nav .wrap { display:flex; align-items:center; gap:22px; height:62px; }
 .logo { display:flex; align-items:center; gap:10px; color:var(--text); font-family:var(--display); font-weight:700; font-size:1.05rem; }
-.logo-mark { display:block; border-radius:8px; box-shadow:0 0 0 1px var(--line-2); }
-.wordmark { font-size:1.12rem; letter-spacing:-.03em; } .wordmark b { font-weight:700; } .wordmark span { font-weight:400; color:var(--text-2); }
+.logo-mark { display:block; }
+.wordmark { font-size:1rem; font-weight:700; letter-spacing:.05em; }
 .nav .links { margin-left:auto; display:flex; gap:20px; align-items:center; font-size:.9rem; }
 .nav .links a { color:var(--text-2); } .nav .links a:hover { color:var(--text); }
 .btn { display:inline-flex; align-items:center; gap:8px; border-radius:10px; padding:10px 16px; font-weight:600; font-size:.92rem;
@@ -648,7 +648,7 @@ footer .links { margin-left:auto; display:flex; gap:18px; } footer a { color:var
 @media (prefers-reduced-motion: reduce) { * { transition:none !important; } .shot { transform:none; } }
 </style></head><body>
 <nav class="nav"><div class="wrap">
-  <a class="logo" href="/" aria-label="Groundtruth home">{wordmark}</a>
+  <a class="logo" href="/" aria-label="Ground Truth home">{wordmark}</a>
   <div class="links"><a class="hide-sm" href="#runs">Runs</a><a class="hide-sm" href="#how">How it works</a>
     <a class="hide-sm" href="/docs">API</a><a class="btn" href="{github}">GitHub</a></div>
 </div></nav>
@@ -699,7 +699,7 @@ footer .links { margin-left:auto; display:flex; gap:18px; } footer a { color:var
   </div>
 </section>
 </main>
-<footer><div class="wrap"><span><b>Groundtruth</b>: what is actually true on the ground, checked against the footage. CS3235 Team 5. Heuristic triage from video, not legal advice or certified measurement.</span>
+<footer><div class="wrap"><span><b>Ground Truth</b>: what is actually true on the ground, checked against the footage. CS3235 Team 5. Heuristic triage from video, not legal advice or certified measurement.</span>
 <div class="links"><a href="/docs">API</a><a href="/api/stats">Assistant monitoring</a><a href="/healthz">Status</a><a href="{github}">GitHub</a></div></div></footer>
 </body></html>"""
 

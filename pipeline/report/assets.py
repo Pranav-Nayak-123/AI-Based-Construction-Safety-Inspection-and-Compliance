@@ -45,9 +45,8 @@ h1, h2, h3 { font-family:var(--display); letter-spacing:-.01em; }
   background:color-mix(in srgb, var(--surface) 86%, transparent); backdrop-filter:saturate(1.4) blur(12px);
   border-bottom:1px solid var(--line); }
 .brand { display:flex; align-items:center; gap:9px; flex:none; }
-.logo-mark { display:block; flex:none; border-radius:9px; box-shadow:0 0 0 1px var(--line-2); }
-.wordmark { font-family:var(--display); font-size:1.08rem; letter-spacing:-.03em; white-space:nowrap; }
-.wordmark b { font-weight:700; } .wordmark span { font-weight:400; color:var(--text-2); }
+.logo-mark { display:block; flex:none; }
+.wordmark { font-family:var(--display); font-weight:700; font-size:.98rem; letter-spacing:.05em; white-space:nowrap; }
 .topbar .ident { min-width:0; display:flex; align-items:center; gap:12px; }
 .topbar .divider { width:1px; height:22px; background:var(--line-2); }
 .topbar .title { font-weight:600; font-size:.92rem; line-height:1.2; white-space:nowrap; }
