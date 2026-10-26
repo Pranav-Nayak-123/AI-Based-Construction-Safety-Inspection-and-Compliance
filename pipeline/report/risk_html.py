@@ -1,6 +1,7 @@
-"""Risk assessment page: the 5×5 register, the matrix, and the "Ask about this run" chat.
+"""Risk assessment page (the 5×5 register and matrix) and the safety assistant drawer.
 
-The register is deterministic (`pipeline/output/risk.py`). The chat panel talks to the
+The register is deterministic (`pipeline/output/risk.py`). The assistant, a slide-over
+panel reachable from every section, talks to the
 hosted API when the page is served by it (`<meta name="safety-api">`, injected by
 `app/cloud.py`); opened as a file, it still answers the suggested questions from the
 register, prepared when the report was written.
@@ -25,16 +26,6 @@ def page(bundle: RunBundle, facts: list[Fact], *, head: str, card) -> str:  # no
     register = "".join(_row(row, short) for row in risk.rows) or (
         '<p class="empty">No hazard condition held in this clip.</p>'
     )
-    prepared = {}
-    for question in SUGGESTED:
-        text, cited = register_answer(bundle, facts, question)
-        prepared[question] = {"text": text, "citations": [f.id for f in cited]}
-    data = {
-        "prepared": prepared,
-        "incidents": {sid: iid for iid, sid in short.items()},
-        "facts": {f.id: f.text for f in facts},
-    }
-    payload = json.dumps(data, ensure_ascii=False).replace("<", "\\u003c")
     top = risk.rows[0] if risk.rows else None
     kpis = "".join(
         f'<div class="kpi"><div class="label">{label}</div><div class="value">{value}</div>'
@@ -50,38 +41,54 @@ def page(bundle: RunBundle, facts: list[Fact], *, head: str, card) -> str:  # no
             ("Workers seen", str(bundle.workers_seen), "in view for at least 3 s"),
         )
     )
+    return f"""{head}
+<div class="kpis">{kpis}</div>
+<div class="stack-gap">
+  {card("Risk register", register, "likelihood × severity, highest first")}
+  <div class="grid cols-2">
+    {card("Risk matrix", _matrix(risk), "5 × 5")}
+    {card("Not rated", _unrated(risk))}
+  </div>
+  <details class="card fold"><summary>How the ratings are made</summary>
+    <div class="card-body">{_method(risk)}</div></details>
+</div>"""
+
+
+def drawer(bundle: RunBundle, facts: list[Fact]) -> str:
+    """The assistant as a slide-over panel, opened from any section of the report."""
+    short = incident_ids(bundle)
+    prepared = {}
+    for question in SUGGESTED:
+        text, cited = register_answer(bundle, facts, question)
+        prepared[question] = {"text": text, "citations": [f.id for f in cited]}
+    data = {
+        "prepared": prepared,
+        "incidents": {sid: iid for iid, sid in short.items()},
+        "facts": {f.id: f.text for f in facts},
+    }
+    payload = json.dumps(data, ensure_ascii=False).replace("<", chr(92) + "u003c")  # no </script>
     chips = "".join(
         f'<button class="btn sm" type="button" data-ask="{escape(q)}">{escape(q)}</button>'
         for q in SUGGESTED
     )
-    return f"""{head}
-<div class="risk-layout">
-  <div class="stack-gap">
-    <div class="kpis">{kpis}</div>
-    {card("Risk register", register, "likelihood × severity, highest first")}
-    <div class="grid cols-2">
-      {card("Risk matrix", _matrix(risk), "5 × 5")}
-      {card("Not rated", _unrated(risk))}
-    </div>
-    {card("How the ratings are made", _method(risk))}
+    return f"""<div class="scrim" aria-hidden="true"></div>
+<aside class="chat" id="chat" aria-label="Safety assistant" aria-hidden="true">
+  <div class="chat-head">
+    <div class="who"><span class="ai-dot" aria-hidden="true"></span><div><b>Safety assistant</b>
+      <div class="hint" id="chat-mode">offline</div></div></div>
+    <button class="btn icon ghost" type="button" data-ask-close aria-label="Close the assistant">✕</button>
   </div>
-  <aside class="card chat" id="chat" aria-label="Ask about this run">
-    <div class="card-head"><h2>Ask about this run</h2><span class="hint" id="chat-mode">offline</span></div>
-    <div class="msgs" id="chat-msgs" aria-live="polite">
-      <div class="msg bot"><div class="bubble">Ask about hazards, workers, incidents or what to
-      do next. Every answer cites the facts it uses; click a citation to see it.</div></div>
-    </div>
-    <div class="suggest">{chips}</div>
-    <form id="chat-form" autocomplete="off">
-      <input id="chat-q" type="text" maxlength="800" placeholder="Ask about risks, workers, incidents…"
-        aria-label="Your question">
-      <button class="btn primary" type="submit">Send</button>
-    </form>
-    <p class="fine">Heuristic triage from video, not legal advice. Numbers and workers in a model
-    answer are checked against the facts it cites; if a check fails, the answer comes from the
-    risk register instead.</p>
-  </aside>
-</div>
+  <div class="msgs" id="chat-msgs" aria-live="polite">
+    <div class="msg bot"><div class="bubble">Ask about this clip's hazards, workers, incidents or what
+    to fix first. Every claim cites a fact from the run; click a citation to see it.</div></div>
+  </div>
+  <div class="suggest" id="chat-suggest">{chips}</div>
+  <form id="chat-form" autocomplete="off">
+    <input id="chat-q" type="text" maxlength="800" placeholder="Ask about risks, workers, incidents…"
+      aria-label="Your question">
+    <button class="btn primary" type="submit">Send</button>
+  </form>
+</aside>
 <script type="application/json" id="chat-data">{payload}</script>"""
 
 
@@ -190,13 +197,13 @@ PPE). They are general good practice, not legal requirements.</li>
 
 
 STYLE = """
-.risk-layout { display:grid; grid-template-columns:minmax(0,1fr) 380px; gap:16px; align-items:start; }
+
 .risk-row { display:grid; grid-template-columns:96px minmax(0,1fr); gap:16px; padding:14px 2px;
   border-bottom:1px solid var(--line); }
 .risk-row:last-child { border-bottom:none; }
 .risk-row .score { display:flex; flex-direction:column; align-items:flex-start; gap:4px;
   border-left:4px solid var(--sev); padding-left:12px; }
-.risk-row .score b { font-size:1.8rem; line-height:1; font-variant-numeric:tabular-nums; }
+.risk-row .score b { font-family:var(--display); font-size:1.9rem; line-height:1; font-variant-numeric:tabular-nums; }
 .risk-row .score > span:not(.chip) { color:var(--text-3); font-size:.8rem; margin-top:-2px; }
 .risk-row .t { font-weight:650; }
 .risk-row .hz { margin:2px 0 6px; color:var(--text-2); font-size:.86rem; }
@@ -219,12 +226,22 @@ button.link:hover { text-decoration:underline; }
 .dot-rule { background:var(--text); color:var(--surface); font-size:.68rem; font-weight:700; border-radius:999px;
   padding:1px 6px; }
 .matrix-cap { display:flex; justify-content:space-between; color:var(--text-3); font-size:.72rem; margin-top:6px; }
-.chat { position:sticky; top:80px; display:flex; flex-direction:column; max-height:calc(100vh - 100px); }
-.chat .msgs { flex:1; overflow:auto; padding:14px 16px; display:flex; flex-direction:column; gap:10px; min-height:220px; }
+.chat { position:fixed; top:0; right:0; bottom:0; width:min(440px, 100vw); z-index:45; display:flex; flex-direction:column;
+  background:var(--surface); border-left:1px solid var(--line-2); box-shadow:var(--shadow-lg);
+  transform:translateX(104%); transition:transform .25s cubic-bezier(.2,.8,.2,1); visibility:hidden; }
+body.chat-open .chat { transform:none; visibility:visible; }
+.chat .chat-head { display:flex; align-items:center; gap:10px; padding:14px 14px 14px 18px; border-bottom:1px solid var(--line); }
+.chat .who { display:flex; align-items:center; gap:10px; margin-right:auto; }
+.chat .who b { font-family:var(--display); font-size:1rem; }
+.chat .hint { color:var(--text-3); font-size:.74rem; }
+.chat .ai-dot { width:30px; height:30px; border-radius:9px; flex:none; background:conic-gradient(from 210deg, var(--accent), #8b5cf6, var(--accent));
+  box-shadow:0 0 0 3px var(--accent-soft); }
+.chat .msgs { flex:1; overflow:auto; padding:14px 16px; display:flex; flex-direction:column; gap:10px; min-height:0; }
 .chat .msg { display:flex; flex-direction:column; max-width:92%; }
 .chat .msg.user { align-self:flex-end; align-items:flex-end; }
-.chat .bubble { padding:9px 12px; border-radius:12px; background:var(--surface-2); font-size:.88rem; }
-.chat .msg.user .bubble { background:var(--accent); color:#fff; }
+.chat .bubble { padding:10px 13px; border-radius:14px; line-height:1.5; background:var(--surface-2); font-size:.88rem; }
+.chat .msg.user .bubble { background:var(--accent); color:#fff; border-bottom-right-radius:4px; }
+.chat .msg.bot .bubble { border-bottom-left-radius:4px; }
 .chat .bubble ul { margin:4px 0; padding-left:18px; }
 .chat .bubble li + li { margin-top:4px; }
 .chat .meta { color:var(--text-3); font-size:.72rem; margin-top:3px; }
@@ -234,11 +251,11 @@ button.link:hover { text-decoration:underline; }
   border-radius:6px; font-size:.8rem; color:var(--text-2); }
 .chat .typing { color:var(--text-3); font-size:.82rem; }
 .chat .suggest { display:flex; flex-wrap:wrap; gap:6px; padding:0 16px 10px; }
-.chat form { display:flex; gap:8px; padding:12px 16px; border-top:1px solid var(--line); }
-.chat input { flex:1; min-width:0; border:1px solid var(--line); border-radius:8px; padding:8px 10px;
+.chat form { display:flex; gap:8px; padding:12px 16px 16px; border-top:1px solid var(--line); }
+.chat input { flex:1; min-width:0; border:1px solid var(--line-2); border-radius:10px; padding:9px 12px;
   background:var(--surface); color:var(--text); font:inherit; }
-.chat .fine { color:var(--text-3); font-size:.72rem; margin:0; padding:0 16px 14px; }
-@media (max-width:1100px) { .risk-layout { grid-template-columns:1fr; } .chat { position:static; max-height:none; } }
+
+@media (max-width:560px) { .chat { width:100vw; } }
 @media (max-width:560px) { .risk-row { grid-template-columns:1fr; } .matrix { grid-template-columns:64px repeat(5, minmax(0,1fr)); } }
 """
 
@@ -253,7 +270,7 @@ const msgs = document.getElementById('chat-msgs');
 const input = document.getElementById('chat-q');
 const mode = document.getElementById('chat-mode');
 const history = [];
-mode.textContent = api ? 'live' : 'offline · suggested questions';
+mode.textContent = api ? 'Live · every claim checked against this run' : 'Offline · suggested questions only';
 if (!api) input.placeholder = 'Offline: pick a suggested question above';
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function inline(text) {
@@ -287,16 +304,16 @@ function add(role, html, meta) {
 let busy = false;
 const send = box.querySelector('form button');
 function describe(reply) {
-  if (reply.source === 'model') return `${reply.model || 'model'} · checked against the cited facts · ${reply.latency_s}s`;
-  const why = (reply.failures || []).map(f => f.split(':')[0]);
-  return why.length ? `From the risk register (the model's answer failed: ${[...new Set(why)].join(', ')})` : 'From the risk register';
+  if (reply.source === 'model') return `Verified against the run · ${reply.model || 'model'} · ${reply.latency_s}s`;
+  if (reply.source === 'scope') return 'Answered by the assistant rules, no model';
+  return (reply.failures || []).length ? 'Answered from the run data (the model draft failed a check)' : 'Answered from the run data';
 }
 async function ask(q) {
   q = q.trim(); if (!q || busy) return;
   add('user', esc(q));
   if (!api) {
     const p = data.prepared[q];
-    if (p) add('bot', render(p.text), 'From the risk register (offline)');
+    if (p) add('bot', render(p.text), 'Answered from the run data (offline)');
     else add('bot', 'Free-text questions need the hosted app. Pick a suggested question, or open this report from the hosted demo.', '');
     return;
   }
@@ -311,7 +328,7 @@ async function ask(q) {
     history.push({ role: 'user', content: q }, { role: 'assistant', content: reply.text });
   } catch (e) {
     const p = data.prepared[q];
-    fill(wait, p ? render(p.text) : esc(e.message || 'The assistant is unavailable.'), p ? 'From the risk register (offline)' : '');
+    fill(wait, p ? render(p.text) : esc(e.message || 'The assistant is unavailable.'), p ? 'Answered from the run data (offline)' : '');
   } finally {
     busy = false; send.disabled = false;
   }
@@ -321,7 +338,7 @@ box.querySelectorAll('[data-ask]').forEach(b => b.addEventListener('click', () =
 msgs.addEventListener('click', e => {
   const b = e.target.closest('[data-cite]'); if (!b) return;
   const id = b.dataset.cite;
-  if (data.incidents[id] && window.openIncident) { window.openIncident(data.incidents[id]); return; }
+  if (data.incidents[id] && window.openIncident) { if (window.closeChat) window.closeChat(); window.openIncident(data.incidents[id]); return; }
   const bubble = b.closest('.bubble'); const open = bubble.querySelector('.fact[data-for="' + id + '"]');
   if (open) { open.remove(); return; }
   const f = document.createElement('div'); f.className = 'fact'; f.dataset.for = id;

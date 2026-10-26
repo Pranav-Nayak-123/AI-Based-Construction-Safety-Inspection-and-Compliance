@@ -636,10 +636,10 @@ def section(
     <div class="card"><div class="card-head"><h2>Camera feed</h2><span class="hint">in sync with the twin</span></div><div class="card-body">{feed}</div></div>
     <div class="card"><div class="card-head"><h2>Selection</h2></div><div class="card-body" id="twin-selected"></div></div>
     <div class="card"><div class="card-head"><h2>Right now</h2></div><div class="card-body"><ul class="twin-live" id="twin-live"></ul></div></div>
-    <div class="card"><div class="card-head"><h2>How to read it</h2></div><div class="card-body small sub">
+    <details class="card fold"><summary>How to read the twin</summary><div class="card-body small sub">
       Positions come from the camera calibrated on the workers themselves, smoothed over time,
       in worker heights (WH), not metres. Drag to orbit, right-drag or shift-drag to pan, scroll to zoom.
-      Workers outside the calibrated area are drawn slightly smaller: their position is less certain.</div></div>
+      Workers outside the calibrated area are drawn slightly smaller: their position is less certain.</div></details>
   </aside>
 </div>
 {embed(data)}

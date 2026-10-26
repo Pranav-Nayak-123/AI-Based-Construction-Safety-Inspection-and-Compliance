@@ -6,7 +6,8 @@ One file, no network, no framework. A sticky top bar and a sidebar of seven sect
 * Incidents — an inbox: the triaged list on the left, the selected incident on the right
   (evidence clip, why it fired, facts, action) with review buttons whose verdicts can be
   exported for `tools/review_incidents.py --import`;
-* Risk assessment — the 5×5 risk register and matrix, and the "Ask about this run" chat;
+* Risk assessment — the 5×5 risk register and matrix (the safety assistant is a drawer
+  opened from the top bar on every section);
 * Leading indicators — exposure, brief exposures, hotspots;
 * Site & camera — zone health and calibration;
 * Run details — rule coverage, timings, models, warnings, privacy and oversight.
@@ -79,6 +80,26 @@ _ICON_PATHS = {
     "run": '<path d="M4 6h16M4 12h16M4 18h10"/>',
     "risk": '<path d="M12 3 4.5 6v6c0 4.4 3.2 8 7.5 9 4.3-1 7.5-4.6 7.5-9V6z"/><path d="m9 12 2 2 4-4"/>',
 }
+
+
+# Display, body and mono faces; offline, the system fonts in the stylesheet take over.
+FONTS = (
+    "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700"
+    "&amp;family=JetBrains+Mono:wght@400;500&amp;family=Space+Grotesk:wght@500;600;700&amp;display=swap"
+)
+_SVG = (
+    '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" '
+    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+)
+SPARK_ICON = (
+    _SVG
+    + '<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></svg>'
+)
+THEME_ICON = (
+    _SVG
+    + '<circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 0 0 16z" fill="currentColor"/></svg>'
+)
+DOWNLOAD_ICON = _SVG + '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>'
 
 
 def icon(name: str) -> str:
@@ -154,6 +175,47 @@ def _page_head(title: str, text: str, *, actions: str = "") -> str:
     return (
         f'<div class="page-head"><div><h1>{escape(title)}</h1><p>{escape(text)}</p></div>'
         f"{actions_html}</div>"
+    )
+
+
+BAND_SLOT = {"very high": "critical", "high": "serious", "medium": "warning", "low": "good"}
+
+
+def _verdict(bundle: RunBundle, clip: str, duration: float, groups: Counter) -> str:
+    """The answer to "is everything okay?", before any detail."""
+    risk = bundle.risk
+    top = risk.rows[0] if risk.rows else None
+    n = len(bundle.incidents)
+    eyebrow = f"{clip} · {_clock(duration)[:-2]} of fixed-camera video · eight hazard rules"
+    if n and top:
+        headline = (
+            f"{n} incident{'s' if n != 1 else ''}. Highest risk: "
+            f"<em>{escape(top.title.lower())}</em>, {escape(top.band)} ({top.rating}/25)."
+        )
+        slot = BAND_SLOT[top.band]
+    elif top:
+        headline = (
+            f"No confirmed incidents. Watch <em>{escape(top.title.lower())}</em>: "
+            f"{escape(top.band)} risk from brief exposures ({top.rating}/25)."
+        )
+        slot = BAND_SLOT[top.band]
+    else:
+        headline = "No confirmed incidents and no hazard condition held in this clip."
+        slot = "good"
+    parts = []
+    if n:
+        parts.append(f"{groups['act']} to act on now, {groups['verify']} to verify first.")
+    if risk.not_assessed:
+        rules = ", ".join(r.value for r, _, _ in risk.not_assessed)
+        parts.append(f"Not assessed in this clip: {rules}, which is not the same as no risk.")
+    actions = ('<a class="btn primary" href="#incidents">Review incidents</a>' if n else "") + (
+        '<button class="btn" type="button" data-ask-open>Ask the assistant</button>'
+        '<a class="btn ghost" href="#risk">Risk register →</a>'
+    )
+    return (
+        f'<div class="hero" style="--sev:var(--{slot})"><div class="eyebrow">{escape(eyebrow)}</div>'
+        f"<h1>{headline}</h1><p>{escape(' '.join(parts))}</p>"
+        f'<div class="cta">{actions}</div></div>'
     )
 
 
@@ -254,24 +316,25 @@ def _span(incident: IncidentRecord, duration: float, y: float, height: float) ->
 # ---------------------------------------------------------------------- incidents
 
 
-def _row(incident: IncidentRecord) -> str:
+def _row(incident: IncidentRecord, duration: float) -> str:
+    """One line under its rule's heading: who, when, for how long, how well evidenced."""
     slot, _, word = SEVERITY.get(incident.severity, ("neutral", "●", incident.severity))
+    end = incident.resolved_at_s if incident.resolved_at_s is not None else duration
     return (
         f'<div class="row" role="option" tabindex="0" aria-selected="false" '
         f'data-id="{escape(incident.incident_id)}" data-rule="{escape(incident.rule_id.value)}" '
-        f'data-group="{v3.group(incident)}" style="--sev:var(--{slot})">'
+        f'data-group="{v3.group(incident)}" style="--sev:var(--{slot})" '
+        f'aria-label="{escape(incident.title)}, {escape(subject(incident))}">'
         f'<div class="bar" aria-hidden="true"></div><div>'
-        f'<div class="top"><span class="t">{escape(incident.title or incident.reason_code)}</span>'
-        f'<span class="verdict"></span></div>'
-        f'<div class="m"><span>{escape(incident.rule_id.value)} · {escape(word)}</span>'
-        f"<span>{escape(subject(incident))}</span><span>{_clock(incident.first_seen_s)}</span>"
+        f'<div class="top"><span class="t">{escape(subject(incident))}</span>'
+        f'<span class="verdict"></span><span class="tm">{_clock(incident.first_seen_s)}</span></div>'
+        f'<div class="m"><span>{escape(word)} · {max(end - incident.first_seen_s, 0):.1f} s</span>'
         f"{v3.quality_dots(incident)}</div></div></div>"
     )
 
 
 def _detail(incident: IncidentRecord, *, near_wh: float, caution_wh: float) -> str:
     slot, icon, word = SEVERITY.get(incident.severity, ("neutral", "●", incident.severity))
-    worker = display_track_label(incident.canonical_track_id or "")
     end = incident.resolved_at_s
     span = f"{_clock(incident.first_seen_s)} – {_clock(end) if end is not None else 'end of clip'}"
     duration = (end if end is not None else incident.confirmed_at_s) - incident.first_seen_s
@@ -294,7 +357,7 @@ def _detail(incident: IncidentRecord, *, near_wh: float, caution_wh: float) -> s
     else:
         say = f'<p class="say">{escape(incident.observation_text)}</p>'
         action = incident.action_text
-    facts = [("When", f"{span} ({duration:.1f} s)"), ("Worker", f"Track {worker}")]
+    facts: list[tuple[str, str]] = []
     ppe_rule = incident.rule_id in (RuleId.R1, RuleId.R2)
     if ppe_rule and incident.helmet is not None:
         state = incident.helmet.state.value.replace("_", " ")
@@ -324,15 +387,14 @@ def _detail(incident: IncidentRecord, *, near_wh: float, caution_wh: float) -> s
             '<button class="btn" data-verdict="unsure">? Unsure</button>',
         ]
     )
-    heuristic = '<span class="chip">Heuristic</span>' if incident.basis == "heuristic" else ""
     why = f'<div class="section-title">Why it fired</div>{trace}' if trace else ""
     return f"""
 <article class="card detail" data-id="{escape(incident.incident_id)}" style="--sev:var(--{slot})" hidden>
   <div class="d-head">
-    <div>{_chip(slot, icon, word)} <span class="chip">{escape(incident.rule_id.value)} · {escape(RULE_NAMES[incident.rule_id])}</span>
-      {heuristic} {v3.quality_chip(incident)}</div>
-    <h2>{escape(incident.title or incident.reason_code)}</h2>
-    <div class="muted small">{escape(subject(incident))} · {escape(span)}</div>
+    <div>{_chip(slot, icon, word)} <span class="chip">{escape(incident.rule_id.value)}</span>
+      {v3.quality_chip(incident)}</div>
+    <h2>{escape(incident.title or incident.reason_code)}: {escape(subject(incident).lower())}</h2>
+    <div class="when">{escape(span)} · {duration:.1f} s</div>
   </div>
   <div class="d-body">
     <div>
@@ -356,7 +418,7 @@ def _detail(incident: IncidentRecord, *, near_wh: float, caution_wh: float) -> s
 
 
 def _incidents_page(
-    incidents: Sequence[IncidentRecord], *, near_wh: float, caution_wh: float
+    incidents: Sequence[IncidentRecord], *, near_wh: float, caution_wh: float, duration: float
 ) -> str:
     if not incidents:
         return _page_head("Incidents", "Nothing persisted long enough to become an incident.") + (
@@ -384,12 +446,19 @@ def _incidents_page(
         members = [i for i in ordered if v3.group(i) == name]
         if members:
             rows.append(f'<div class="section-label" data-group="{name}">{label}</div>')
-            rows += [_row(i) for i in members]
+            # one heading per rule, in triage order, instead of the rule's title on every row
+            for rule in dict.fromkeys(i.rule_id for i in members):
+                inside = [i for i in members if i.rule_id is rule]
+                rows.append(
+                    f'<div class="rule-head" data-group="{name}" data-rule="{rule.value}">'
+                    f"<b>{rule.value}</b>{escape(RULE_NAMES[rule])}<span>{len(inside)}</span></div>"
+                )
+                rows += [_row(i, duration) for i in inside]
     details = "".join(_detail(i, near_wh=near_wh, caution_wh=caution_wh) for i in ordered)
     head = _page_head(
         "Incidents",
-        "Most severe and best-evidenced first. Select one to see its clip, why it fired and what "
-        "to do; mark it real or a false alarm to measure precision.",
+        "Grouped by rule, most severe and best evidenced first. Mark each one real or a false "
+        "alarm to measure precision.",
         actions=(
             '<span class="muted small" id="team-review" hidden></span>'
             '<span class="muted small" data-review-count></span>'
@@ -608,6 +677,16 @@ def render_report(
     person_tracks = (
         f"{sum(t.object_class == 'person' for t in tracks.tracks)} track IDs" if tracks else ""
     )
+    bundle = RunBundle(
+        run_dir=Path("."),
+        manifest=manifest,
+        incidents=list(incidents),
+        insights=insights,
+        tracks=tracks,
+        zone_labels=dict(zone_labels or {}),
+        catalogue=load_catalogue(),
+    )
+    facts = build_facts(bundle)
     overview_kpis = _kpis(
         [
             (
@@ -640,17 +719,15 @@ def render_report(
         else '<p class="empty">No video in this bundle.</p>'
     )
     overview = f"""
-{_page_head("Overview", f"{Path(source.path).name} · {duration:.0f} s of fixed-camera video, checked against eight hazard rules.")}
-<div class="banner"><span aria-hidden="true">!</span><span>{escape(manifest.disclaimer)}</span></div>
+{_verdict(bundle, Path(source.path).name, duration, groups)}
 {overview_kpis}
 <div class="grid cols-3-2">
-  {_card("Replay", player + _timeline(incidents, duration), "720p · click the timeline or an incident to seek")}
+  {_card("Replay", player + _timeline(incidents, duration), "click the timeline or an incident to seek")}
   <div class="stack-gap">
     {_card("Top priorities", _priorities(incidents), '<a href="#incidents">All incidents →</a>')}
     {_card("Rule status", _rule_status(manifest), '<a href="#run">Coverage →</a>')}
   </div>
-</div>
-<div style="margin-top:16px">{_card("How to read this report", v3.oversight(private))}</div>"""
+</div>"""
 
     if insights is not None:
         indicators = f"""
@@ -700,7 +777,7 @@ def render_report(
 </div>
 <div class="grid cols-2" style="margin-top:16px">
   {_card("Warnings", f'<ul class="clean">{warnings}</ul>')}
-  {_card("Privacy and oversight", v3.oversight(private))}
+  {_card("About this report", v3.oversight(private))}
 </div>"""
 
     nav_counts = {"incidents": str(len(incidents))}
@@ -711,43 +788,48 @@ def render_report(
         for key, label in NAV
     )
     downloads = "".join(
-        f'<a class="btn" href="{escape(path)}" download>{escape(label)}</a>'
-        for label, path in (
-            ("incidents.json", manifest.output_artifacts.get("incidents")),
-            ("insights.json", manifest.output_artifacts.get("insights")),
+        f'<a href="{escape(path)}" download>{escape(label)}<span>{escape(note)}</span></a>'
+        for label, path, note in (
+            (
+                "Incidents",
+                manifest.output_artifacts.get("incidents"),
+                "incidents.json · every confirmed event",
+            ),
+            (
+                "Leading indicators",
+                manifest.output_artifacts.get("insights"),
+                "insights.json · exposure and near-misses",
+            ),
+            ("Replay video", video, "MP4 · camera and twin side by side"),
         )
         if path
     )
-    completed = escape((manifest.completed_at or "")[:16].replace("T", " "))
-    meta = (
-        f"{escape(Path(source.path).name)} · {source.width}×{source.height} · {duration:.0f} s"
-        f" · {completed} UTC"
+    menu = (
+        '<details class="menu"><summary class="btn" aria-label="Downloads">'
+        f'{DOWNLOAD_ICON}<span class="hide-sm">Download</span></summary>'
+        f'<div class="menu-pop">{downloads}</div></details>'
+        if downloads
+        else ""
     )
-    incidents_page = _incidents_page(incidents, near_wh=near_wh, caution_wh=caution_wh)
-    bundle = RunBundle(
-        run_dir=Path("."),
-        manifest=manifest,
-        incidents=list(incidents),
-        insights=insights,
-        tracks=tracks,
-        zone_labels=dict(zone_labels or {}),
-        catalogue=load_catalogue(),
+    completed = escape((manifest.completed_at or "")[:16].replace("T", " "))
+    meta = f"{source.width}×{source.height} · {_clock(duration)[:-2]} · {completed} UTC"
+    incidents_page = _incidents_page(
+        incidents, near_wh=near_wh, caution_wh=caution_wh, duration=duration
     )
     risk_page = risk_html.page(
         bundle,
-        build_facts(bundle),
+        facts,
         head=_page_head(
             "Risk assessment",
-            "What this clip says about risk on site: each hazard rated likelihood × severity, "
-            "with controls in hierarchy-of-controls order. Ask about the run on the right.",
+            "Each hazard rated likelihood × severity, with controls in hierarchy-of-controls "
+            "order.",
         ),
         card=_card,
     )
     if twin is not None:
         twin_page = _page_head(
             "Digital twin",
-            "The site rebuilt in 3D from the camera: every worker on the calibrated ground "
-            "plane, zones and edges as you configured them, replayed in step with the video.",
+            "The site rebuilt in 3D from the camera, replayed in step with the video.",
         ) + twin_viewer.section(
             twin,
             video,
@@ -765,16 +847,21 @@ def render_report(
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Site safety report</title><style>{STYLE}{twin_viewer.STYLE}{risk_html.STYLE}</style></head>
+<title>{escape(Path(source.path).name)} · Safety Twin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="{FONTS}">
+<style>{STYLE}{twin_viewer.STYLE}{risk_html.STYLE}</style></head>
 <body data-run="{escape(manifest.run_id)}">
-<header class="topbar"><div class="brand">ST</div>
-<div style="min-width:0"><div class="title">Site safety report</div><div class="meta">{meta}</div></div>
-<div class="spacer"></div>{downloads}
-<button class="btn" id="theme" type="button" aria-label="Toggle light or dark theme">◐ Theme</button></header>
+<header class="topbar"><div class="ident"><div class="brand" aria-hidden="true"></div>
+<span class="product">Safety Twin</span><span class="divider" aria-hidden="true"></span>
+<div style="min-width:0"><div class="title">{escape(Path(source.path).name)}</div><div class="meta">{meta}</div></div></div>
+<div class="spacer"></div>
+<a class="back" href="/" data-hosted hidden>← All runs</a>
+<button class="btn primary" type="button" data-ask-open>{SPARK_ICON}<span class="hide-sm">Ask the assistant</span></button>
+{menu}
+<button class="btn icon" id="theme" type="button" aria-label="Toggle light or dark theme" title="Theme">{THEME_ICON}</button></header>
 <div class="shell">
-<nav class="sidebar" aria-label="Sections"><div class="group">Report</div><div class="nav">{nav}</div>
-<div class="foot">Offline report generated by the Construction Safety Twin pipeline. Heuristic
-triage from video, not legal advice or certified measurement.</div></nav>
+<nav class="sidebar" aria-label="Sections"><div class="group">Report</div><div class="nav">{nav}</div></nav>
 <main>
 <section class="page" id="page-overview">{overview}</section>
 <section class="page" id="page-twin">{twin_page}</section>
@@ -783,7 +870,12 @@ triage from video, not legal advice or certified measurement.</div></nav>
 <section class="page" id="page-indicators">{indicators}</section>
 <section class="page" id="page-site">{site}</section>
 <section class="page" id="page-run">{run}</section>
+<footer class="page-foot"><span>Heuristic triage from video: every incident is a prompt for a
+person to check, not a verdict, legal advice or certified measurement.</span>
+<span>Run <span class="mono">{escape(manifest.run_id)}</span></span></footer>
 </main></div>
+{risk_html.drawer(bundle, facts)}
+<button class="fab" type="button" data-ask-open aria-label="Ask the safety assistant">{SPARK_ICON}Ask</button>
 <div class="tooltip" id="tip" role="tooltip"></div>
 {'<script src="' + twin_viewer.THREE_ASSET + '"></script>' if twin is not None else ""}
 <script>{SCRIPT}{risk_html.SCRIPT}{twin_viewer.SCRIPT if twin is not None else ""}</script></body></html>

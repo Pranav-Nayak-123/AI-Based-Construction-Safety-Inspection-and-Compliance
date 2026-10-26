@@ -219,12 +219,33 @@ review_limiter = Limiter(60)
 _review_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
 
+def refresh_reports() -> None:
+    """Re-render each published report with this deploy's report code.
+
+    Published bundles carry the report.html of the day they were processed; rebuilding
+    from the bundle's own JSON keeps every run on the current design. A run that cannot
+    be rebuilt keeps the report it was published with.
+    """
+    if os.environ.get("SAFETY_REFRESH_REPORTS", "1") == "0":
+        return
+    from pipeline.report.html import rebuild_report
+
+    for run_id in store.ids():
+        try:
+            rebuild_report(store.path(run_id))
+        except Exception as error:  # noqa: BLE001 - keep the published report
+            log.warning(
+                json.dumps({"event": "report_rebuild_failed", "run": run_id, "error": str(error)})
+            )
+
+
 def _startup() -> None:
     store.root.mkdir(parents=True, exist_ok=True)
     try:
         fetch_published(store.root)
     except Exception as error:  # noqa: BLE001 - serve what is on disk rather than fail
         log.error(json.dumps({"event": "runs_fetch_failed", "error": str(error)}))
+    refresh_reports()
     log.info(
         json.dumps(
             {"event": "started", "runs": store.ids(), "llm": provider.name if provider else None}
@@ -294,6 +315,7 @@ def runs() -> list[dict[str, Any]]:
                 "clip": PureWindowsPath(bundle.manifest.input_video.path).name,  # / or \
                 "duration_s": round(bundle.duration_s, 1),
                 "incidents": len(bundle.incidents),
+                "workers": bundle.workers_seen,
                 "completed_at": bundle.manifest.completed_at,
                 "top_risk": {"rule": top.rule_id.value, "band": top.band, "rating": top.rating}
                 if top
@@ -419,10 +441,7 @@ def monitoring() -> dict[str, Any]:
 
 @app.get("/", response_class=HTMLResponse)
 def gallery() -> str:
-    cards = "".join(_card(r) for r in runs()) or ('<p class="empty">No runs published yet.</p>')
-    return GALLERY.replace("{cards}", cards).replace(
-        "{llm}", escape(provider.model if provider else "the risk register only")
-    )
+    return gallery_page()
 
 
 @app.get("/runs/{run_id}")
@@ -467,82 +486,257 @@ def _thumbnail(run_id: str) -> str | None:
 
 def _card(run: dict[str, Any]) -> str:
     top = run["top_risk"]
+    band = top["band"] if top else "low"
     risk = (
-        f'<span class="pill {escape(top["band"].replace(" ", "-"))}">'
-        f"{escape(top['rule'])} · {escape(top['band'])} {top['rating']}/25</span>"
+        f'<span class="pill {escape(band.replace(" ", "-"))}">{escape(top["rule"])} · '
+        f"{escape(band)} {top['rating']}/25</span>"
         if top
         else '<span class="pill low">no hazard rated</span>'
     )
     src = run["thumbnail"]
     if not src:
         thumb = '<div class="ph">no preview</div>'
-    elif ".mp4" in src:
-        thumb = f'<video src="{escape(src)}" preload="metadata" muted playsinline></video>'
+    elif ".mp4" in src:  # the side-by-side render: show its camera half
+        thumb = f'<video class="composite" src="{escape(src)}" preload="metadata" muted playsinline></video>'
     else:
         thumb = f'<img src="{escape(src)}" alt="" loading="lazy">'
-
-    return f"""<a class="run" href="{escape(run["report"])}">
-  <div class="thumb">{thumb}</div>
+    stem = Path(PureWindowsPath(run["clip"]).name).stem
+    title = f"Clip {stem}" if stem.isdigit() else stem.replace("_", " ").capitalize()
+    n = run["incidents"]
+    return f"""<a class="run" href="{escape(run["report"])}" style="--band:var(--{BAND_SLOT.get(band, "good")})">
+  <div class="thumb">{thumb}<span class="dur">{_mmss(run["duration_s"])}</span></div>
   <div class="body">
-  <div class="clip">{escape(run["clip"])}</div>
-  <div class="id">{escape(run["run_id"])}</div>
-  <div class="facts"><span>{run["duration_s"]:.0f} s of video</span><span>{run["incidents"]} incidents</span></div>
-  {risk}
+    <div class="row1"><span class="clip">{escape(title)}</span>{risk}</div>
+    <div class="facts"><span><b>{n}</b> incident{"s" if n != 1 else ""}</span>
+      <span><b>{run["workers"]}</b> workers seen</span></div>
+    <div class="foot"><span class="id">{escape(run["run_id"])}</span><span class="open">Open report →</span></div>
   </div>
 </a>"""
 
 
+BAND_SLOT = {"very high": "critical", "high": "serious", "medium": "warning", "low": "good"}
+
+
+def _mmss(seconds: float) -> str:
+    return f"{int(seconds // 60)}:{int(seconds % 60):02d}"
+
+
+GITHUB = "https://github.com/Pranav-Nayak-123/construction-safety-twin"
+FONTS = (
+    "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700"
+    "&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap"
+)
+
 GALLERY = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Construction Safety Twin</title>
+<title>Safety Twin · construction safety from CCTV</title>
+<meta name="description" content="Construction CCTV turned into hazard incidents, a 3D digital twin, a risk register and a cited safety assistant.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="{fonts}">
 <style>
-:root { --bg:#f5f5f3; --surface:#fff; --line:#e3e1dc; --text:#0b0b0b; --text-2:#52514e; --text-3:#7b7a74;
-  --accent:#2a78d6; --good:#0ca30c; --warning:#fab219; --serious:#ec835a; --critical:#d03b3b; }
-@media (prefers-color-scheme: dark) { :root { --bg:#121211; --surface:#1a1a19; --line:#2f2f2c; --text:#fff;
-  --text-2:#c3c2b7; --text-3:#8f8e87; --accent:#3987e5; } }
-* { box-sizing:border-box; } body { margin:0; background:var(--bg); color:var(--text);
-  font:15px/1.55 Inter, "Segoe UI", system-ui, sans-serif; }
-header { padding:48px 20px 24px; max-width:1080px; margin:0 auto; }
-h1 { margin:0 0 8px; font-size:1.9rem; letter-spacing:-.01em; } header p { color:var(--text-2); max-width:760px; margin:0; }
-main { max-width:1080px; margin:0 auto; padding:0 20px 48px; }
-.grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:14px; }
-.run { display:block; background:var(--surface); border:1px solid var(--line); border-radius:14px; overflow:hidden;
-  color:inherit; text-decoration:none; transition:border-color .15s, transform .15s; }
-.run:hover { border-color:var(--accent); transform:translateY(-2px); }
-.run .body { padding:14px 18px 18px; }
-.thumb { aspect-ratio:16/9; background:#000; } .thumb img, .thumb video { width:100%; height:100%; object-fit:cover; display:block; }
-.thumb .ph { height:100%; display:grid; place-items:center; color:var(--text-3); font-size:.8rem; background:var(--line); }
-.steps { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:14px; margin:0 0 28px; }
-.step { border-left:3px solid var(--accent); padding:4px 0 4px 14px; }
-.step b { display:block; } .step span { color:var(--text-2); font-size:.88rem; }
-h2 { font-size:1rem; margin:0 0 12px; color:var(--text-2); font-weight:600; }
-@media (max-width:760px) { .steps { grid-template-columns:1fr; } }
-.clip { font-weight:650; font-size:1.05rem; } .id { color:var(--text-3); font-size:.8rem; }
-.facts { display:flex; gap:12px; color:var(--text-2); font-size:.86rem; margin:10px 0; }
-.pill { display:inline-block; border-radius:999px; padding:2px 10px; font-size:.78rem; font-weight:600;
-  border:1px solid var(--line); }
-.pill::before { content:""; display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
+:root { color-scheme:light; --bg:#f6f7f9; --surface:#fff; --surface-2:#f1f3f6; --line:#e2e5ea; --line-2:#d3d8e0;
+  --text:#0e1116; --text-2:#465061; --text-3:#7a8394; --accent:#2563eb; --accent-soft:#e8efff; --hazard:#f5b301;
+  --good:#0ca30c; --warning:#fab219; --serious:#ec835a; --critical:#d03b3b; --grid:rgba(37,99,235,.07);
+  --display:"Space Grotesk", Inter, "Segoe UI", system-ui, sans-serif; --mono:"JetBrains Mono", ui-monospace, Consolas, monospace; }
+@media (prefers-color-scheme: dark) { :root { color-scheme:dark; --bg:#0c0e12; --surface:#13161b; --surface-2:#1a1e25;
+  --line:#242a33; --line-2:#2f3642; --text:#eef1f5; --text-2:#b3bbc7; --text-3:#7d8796; --accent:#5b9dff;
+  --accent-soft:rgba(91,157,255,.13); --grid:rgba(91,157,255,.06); } }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--text); font:15px/1.6 Inter, "Segoe UI", system-ui, sans-serif; -webkit-font-smoothing:antialiased; }
+a { color:var(--accent); text-decoration:none; }
+.wrap { max-width:1160px; margin:0 auto; padding:0 24px; }
+h1, h2, h3 { font-family:var(--display); letter-spacing:-.02em; margin:0; }
+/* nav */
+.nav { position:sticky; top:0; z-index:10; background:color-mix(in srgb, var(--bg) 82%, transparent);
+  backdrop-filter:saturate(1.4) blur(12px); border-bottom:1px solid var(--line); }
+.nav .wrap { display:flex; align-items:center; gap:22px; height:62px; }
+.logo { display:flex; align-items:center; gap:10px; color:var(--text); font-family:var(--display); font-weight:700; font-size:1.05rem; }
+.mark { width:30px; height:30px; border-radius:8px; position:relative; overflow:hidden;
+  background:repeating-linear-gradient(135deg, var(--hazard) 0 5px, #15171b 5px 10px); }
+.mark::after { content:""; position:absolute; inset:7px; border-radius:5px; background:#15171b url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23f5b301' stroke-width='2.4' stroke-linejoin='round'%3E%3Cpath d='M12 3 4 7.5v9L12 21l8-4.5v-9z'/%3E%3Cpath d='M4 7.5 12 12l8-4.5M12 12v9'/%3E%3C/svg%3E") center/12px no-repeat; }
+.nav .links { margin-left:auto; display:flex; gap:20px; align-items:center; font-size:.9rem; }
+.nav .links a { color:var(--text-2); } .nav .links a:hover { color:var(--text); }
+.btn { display:inline-flex; align-items:center; gap:8px; border-radius:10px; padding:10px 16px; font-weight:600; font-size:.92rem;
+  border:1px solid var(--line-2); color:var(--text); background:var(--surface); transition:transform .15s, background .15s; }
+.btn:hover { transform:translateY(-1px); }
+.btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+.nav .btn { padding:7px 12px; font-size:.85rem; }
+/* hero */
+.hero { position:relative; overflow:hidden; border-bottom:1px solid var(--line);
+  background-image:linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size:32px 32px; }
+.hero::after { content:""; position:absolute; inset:0; pointer-events:none;
+  background:radial-gradient(900px 400px at 85% 10%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 70%),
+             linear-gradient(transparent 70%, var(--bg)); }
+.hero .wrap { position:relative; z-index:1; display:grid; grid-template-columns:minmax(0,1.05fr) minmax(0,1fr); gap:48px; align-items:center; padding-top:72px; padding-bottom:72px; }
+.eyebrow { display:inline-flex; align-items:center; gap:8px; font-family:var(--mono); font-size:.76rem; color:var(--text-2);
+  border:1px solid var(--line-2); border-radius:999px; padding:4px 12px; background:var(--surface); }
+.eyebrow i { width:7px; height:7px; border-radius:50%; background:var(--good); box-shadow:0 0 0 3px color-mix(in srgb, var(--good) 25%, transparent); }
+.hero h1 { font-size:clamp(2.1rem, 4.4vw, 3.4rem); line-height:1.06; margin:18px 0 16px; font-weight:700; }
+.hero h1 span { color:var(--accent); }
+.hero p.lead { font-size:1.08rem; color:var(--text-2); max-width:540px; margin:0 0 26px; }
+.hero .cta { display:flex; gap:10px; flex-wrap:wrap; }
+.shot { position:relative; border-radius:16px; border:1px solid var(--line-2); background:var(--surface); padding:8px;
+  box-shadow:0 30px 80px rgba(0,0,0,.28); transform:perspective(1400px) rotateY(-6deg) rotateX(2deg); }
+.shot img { display:block; width:100%; border-radius:10px; aspect-ratio:16/9; object-fit:cover; }
+.shot .tag { position:absolute; display:flex; align-items:center; gap:8px; background:color-mix(in srgb, var(--surface) 92%, transparent);
+  backdrop-filter:blur(8px); border:1px solid var(--line-2); border-radius:12px; padding:8px 12px; font-size:.82rem; box-shadow:0 10px 30px rgba(0,0,0,.18); }
+.shot .tag b { font-family:var(--display); font-size:1.1rem; }
+.shot .t1 { left:-22px; bottom:28px; } .shot .t2 { right:-18px; top:24px; }
+.dot { width:9px; height:9px; border-radius:50%; flex:none; }
+/* stats */
+.stats { display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); border:1px solid var(--line); border-radius:16px; background:var(--surface);
+  margin:-36px auto 0; position:relative; z-index:2; overflow:hidden; }
+.stats div { padding:18px 22px; } .stats div + div { border-left:1px solid var(--line); }
+.stats b { display:block; font-family:var(--display); font-size:1.9rem; letter-spacing:-.02em; line-height:1.15; font-variant-numeric:tabular-nums; }
+.stats span { color:var(--text-3); font-size:.84rem; }
+section { padding:64px 0 8px; }
+.sec-head { display:flex; align-items:flex-end; gap:16px; margin-bottom:22px; }
+.sec-head h2 { font-size:1.6rem; } .sec-head p { margin:6px 0 0; color:var(--text-2); }
+.kicker { font-family:var(--mono); font-size:.74rem; color:var(--accent); text-transform:uppercase; letter-spacing:.1em; }
+/* runs */
+.grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); gap:18px; }
+.run { display:block; background:var(--surface); border:1px solid var(--line); border-radius:16px; overflow:hidden; color:inherit;
+  transition:border-color .15s, transform .15s, box-shadow .15s; position:relative; }
+.run::before { content:""; position:absolute; left:0; right:0; top:0; height:3px; background:var(--band); z-index:1; }
+.run:hover { border-color:var(--line-2); transform:translateY(-3px); box-shadow:0 18px 40px rgba(0,0,0,.18); }
+.thumb { position:relative; aspect-ratio:16/9; background:#000; overflow:hidden; }
+.thumb img, .thumb video { width:100%; height:100%; object-fit:cover; display:block; transition:transform .4s; }
+.thumb video.composite { transform:scale(2.06); transform-origin:0 13%; }
+.run:hover .thumb img { transform:scale(1.04); }
+.thumb .dur { position:absolute; right:10px; bottom:10px; font-family:var(--mono); font-size:.74rem; color:#fff; background:rgba(0,0,0,.6);
+  border-radius:6px; padding:1px 7px; }
+.thumb .ph { height:100%; display:grid; place-items:center; color:var(--text-3); font-size:.8rem; background:var(--surface-2); }
+.run .body { padding:16px 18px 16px; }
+.row1 { display:flex; align-items:center; gap:10px; justify-content:space-between; }
+.clip { font-family:var(--display); font-weight:700; font-size:1.15rem; }
+.facts { display:flex; gap:16px; color:var(--text-2); font-size:.88rem; margin:10px 0 12px; }
+.facts b { color:var(--text); font-variant-numeric:tabular-nums; }
+.run .foot { display:flex; justify-content:space-between; align-items:center; border-top:1px solid var(--line); padding-top:12px; font-size:.82rem; }
+.id { font-family:var(--mono); color:var(--text-3); font-size:.76rem; } .open { color:var(--accent); font-weight:600; }
+.pill { display:inline-flex; align-items:center; gap:6px; border-radius:999px; padding:2px 10px; font-size:.75rem; font-weight:600;
+  border:1px solid var(--line-2); white-space:nowrap; }
+.pill::before { content:""; width:7px; height:7px; border-radius:50%; }
 .pill.very-high::before { background:var(--critical); } .pill.high::before { background:var(--serious); }
 .pill.medium::before { background:var(--warning); } .pill.low::before { background:var(--good); }
-.about { margin-top:28px; color:var(--text-2); font-size:.88rem; display:grid; gap:6px; }
-.about a { color:var(--accent); } .empty { color:var(--text-3); }
+/* how it works */
+.steps { display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:14px; counter-reset:step; }
+.step { position:relative; background:var(--surface); border:1px solid var(--line); border-radius:16px; padding:20px 18px 18px; }
+.step::before { counter-increment:step; content:"0" counter(step); font-family:var(--mono); font-size:.74rem; color:var(--text-3); }
+.step .ic { width:38px; height:38px; border-radius:10px; display:grid; place-items:center; background:var(--accent-soft); color:var(--accent); margin:10px 0 14px; }
+.step h3 { font-size:1.05rem; margin-bottom:6px; }
+.step p { margin:0; color:var(--text-2); font-size:.89rem; }
+.step .tech { margin-top:12px; display:flex; flex-wrap:wrap; gap:6px; }
+.step .tech span { font-family:var(--mono); font-size:.7rem; color:var(--text-2); background:var(--surface-2); border:1px solid var(--line); border-radius:6px; padding:1px 7px; }
+.trust { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:14px; margin-top:14px; }
+.trust div { border:1px dashed var(--line-2); border-radius:14px; padding:14px 16px; color:var(--text-2); font-size:.88rem; }
+.trust b { color:var(--text); display:block; margin-bottom:2px; }
+footer { margin-top:64px; border-top:1px solid var(--line); padding:26px 0 40px; color:var(--text-3); font-size:.84rem; }
+footer .wrap { display:flex; gap:10px 24px; flex-wrap:wrap; align-items:center; }
+footer .links { margin-left:auto; display:flex; gap:18px; } footer a { color:var(--text-2); }
+.empty { color:var(--text-3); }
+@media (max-width:900px) {
+  .hero .wrap { grid-template-columns:1fr; padding-top:48px; padding-bottom:64px; }
+  .shot { transform:none; } .shot .t1 { left:10px; } .shot .t2 { right:10px; }
+  .stats { grid-template-columns:repeat(2, minmax(0,1fr)); } .stats div:nth-child(3) { border-left:none; }
+  .stats div:nth-child(n+3) { border-top:1px solid var(--line); }
+  .steps, .trust { grid-template-columns:1fr 1fr; }
+  .nav .links a.hide-sm { display:none; }
+}
+@media (max-width:560px) { .steps, .trust { grid-template-columns:1fr; } .wrap { padding:0 16px; } }
+@media (prefers-reduced-motion: reduce) { * { transition:none !important; } .shot { transform:none; } }
 </style></head><body>
-<header><h1>Construction Safety Twin</h1>
-<p>Fixed-camera construction footage turned into hazard incidents, leading indicators, a 3D digital
-twin and a risk register, with a chatbot that answers only from the run and cites every fact.
-Heuristic triage from video, not legal advice or certified measurement.</p></header>
-<main>
-<div class="steps">
-  <div class="step"><b>1 · Detect</b><span>Workers, hard hats, machines, loads, fire and smoke, tracked
-  through occlusion; faces pixelated in everything exported.</span></div>
-  <div class="step"><b>2 · Assess</b><span>Eight hazard rules with debounce and evidence grades, leading
-  indicators, and a 5×5 risk register with hierarchy-of-controls actions.</span></div>
-  <div class="step"><b>3 · Explain</b><span>A 3D twin of the site, a "why it fired" trace per incident,
-  and a chatbot whose every number is checked against the run.</span></div>
-</div>
-<h2>Processed runs</h2>
-<div class="grid">{cards}</div>
-<div class="about"><div>Chat answers come from <b>{llm}</b>; every number and worker is checked against
-the facts it cites, and a failed check falls back to the risk register.</div>
-<div><a href="/docs">API</a> · <a href="/api/stats">Chatbot monitoring</a> · <a href="/healthz">Health</a></div></div>
-</main></body></html>"""
+<nav class="nav"><div class="wrap">
+  <a class="logo" href="/"><span class="mark" aria-hidden="true"></span>Safety Twin</a>
+  <div class="links"><a class="hide-sm" href="#runs">Runs</a><a class="hide-sm" href="#how">How it works</a>
+    <a class="hide-sm" href="/docs">API</a><a class="btn" href="{github}">GitHub</a></div>
+</div></nav>
+<header class="hero"><div class="wrap">
+  <div>
+    <span class="eyebrow"><i></i>Live demo · {runs_n} processed site videos</span>
+    <h1>Every hazard on site, <span>and why it fired.</span></h1>
+    <p class="lead">Fixed construction-camera footage turned into confirmed incidents with evidence clips,
+    a 3D digital twin, a 5×5 risk register and an assistant that cites the run for every claim.</p>
+    <div class="cta"><a class="btn primary" href="{featured_url}">Open the {featured_name} report →</a>
+      <a class="btn" href="#how">How it works</a></div>
+  </div>
+  {featured_shot}
+</div></header>
+<div class="wrap"><div class="stats">
+  <div><b>{runs_n}</b><span>site videos processed</span></div>
+  <div><b>{minutes}</b><span>minutes of footage analysed</span></div>
+  <div><b>{incidents}</b><span>incidents confirmed</span></div>
+  <div><b>8</b><span>hazard rules, R1 to R8</span></div>
+</div></div>
+<main class="wrap">
+<section id="runs">
+  <div class="sec-head"><div><div class="kicker">Reports</div><h2>Processed runs</h2>
+  <p>Each opens a full report: replay, digital twin, incident inbox, risk register and the assistant.</p></div></div>
+  <div class="grid">{cards}</div>
+</section>
+<section id="how">
+  <div class="sec-head"><div><div class="kicker">Pipeline</div><h2>How it works</h2>
+  <p>From raw CCTV to a checked answer, on one fixed camera, without face recognition.</p></div></div>
+  <div class="steps">
+    <div class="step"><div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 9h4v4H7z"/></svg></div>
+      <h3>Detect</h3><p>Workers, helmets, vests, machinery, crane loads, fire and smoke in every frame; faces pixelated.</p>
+      <div class="tech"><span>YOLOE-26</span><span>PPE classifier</span></div></div>
+    <div class="step"><div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 7.5v9L12 21l8-4.5v-9z"/><path d="M4 7.5 12 12l8-4.5M12 12v9"/></svg></div>
+      <h3>Track and map</h3><p>Each worker followed through occlusion and placed on a ground plane calibrated from the workers themselves.</p>
+      <div class="tech"><span>ByteTrack</span><span>3D twin</span></div></div>
+    <div class="step"><div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4.5 6v6c0 4.4 3.2 8 7.5 9 4.3-1 7.5-4.6 7.5-9V6z"/><path d="m9 12 2 2 4-4"/></svg></div>
+      <h3>Assess</h3><p>Eight hazard rules with debounce and evidence grades, leading indicators, and a likelihood × severity register.</p>
+      <div class="tech"><span>R1–R8</span><span>5×5 matrix</span></div></div>
+    <div class="step"><div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/><path d="M8.5 11h7M8.5 14h4"/></svg></div>
+      <h3>Explain</h3><p>A "why it fired" trace per incident, and an assistant whose every number is checked against the run.</p>
+      <div class="tech"><span>{llm}</span><span>cited facts</span></div></div>
+  </div>
+  <div class="trust">
+    <div><b>Checked, not generated</b>Counts, times and rankings are computed from the run; the model only words them, and a failed check falls back to the run data.</div>
+    <div><b>Privacy by default</b>Faces are pixelated everywhere; workers are per-clip track numbers, never identities.</div>
+    <div><b>Honest coverage</b>Every rule reports alert, clear, inconclusive or not applicable, so "not checked" never reads as "safe".</div>
+  </div>
+</section>
+</main>
+<footer><div class="wrap"><span>Safety Twin · CS3235 Team 5. Heuristic triage from video, not legal advice or certified measurement.</span>
+<div class="links"><a href="/docs">API</a><a href="/api/stats">Assistant monitoring</a><a href="/healthz">Status</a><a href="{github}">GitHub</a></div></div></footer>
+</body></html>"""
+
+
+def gallery_page() -> str:
+    listed = runs()
+    cards = "".join(_card(r) for r in listed) or '<p class="empty">No runs published yet.</p>'
+    featured = max(listed, key=lambda r: (r["incidents"], r["duration_s"]), default=None)
+    shot = ""
+    if featured and featured["thumbnail"] and ".mp4" not in featured["thumbnail"]:
+        top = featured["top_risk"]
+        risk_tag = (
+            f'<div class="tag t2"><span class="dot" style="background:var(--'
+            f'{BAND_SLOT.get(top["band"], "good")})"></span>{escape(top["rule"])} · '
+            f"{escape(top['band'])} <b>{top['rating']}/25</b></div>"
+            if top
+            else ""
+        )
+        shot = (
+            f'<div class="shot"><img src="{escape(featured["thumbnail"])}" alt="Camera view with '
+            f'the configured zones">{risk_tag}<div class="tag t1"><b>{featured["incidents"]}</b> '
+            "incidents, each with an evidence clip</div></div>"
+        )
+    values = {
+        "fonts": FONTS.replace("&", "&amp;"),
+        "github": GITHUB,
+        "runs_n": str(len(listed)),
+        "minutes": f"{sum(r['duration_s'] for r in listed) / 60:.1f}",
+        "incidents": str(sum(r["incidents"] for r in listed)),
+        "featured_url": escape(featured["report"]) if featured else "#runs",
+        "featured_name": escape(
+            f"clip {Path(PureWindowsPath(featured['clip']).name).stem}" if featured else "latest"
+        ),
+        "featured_shot": shot,
+        "llm": escape(provider.model if provider else "run data"),
+        "cards": cards,
+    }
+    page = GALLERY
+    for key, value in values.items():
+        page = page.replace("{" + key + "}", value)
+    return page
