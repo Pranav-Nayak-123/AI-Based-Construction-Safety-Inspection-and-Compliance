@@ -339,7 +339,7 @@ def _claims(text: str, by_id: dict[str, Fact], question: str) -> list[str]:
             facts = [by_id[fid] for fid in cover if fid in by_id]
             body = LIST_MARKER.sub("", CITATION.sub("", claim))
             workers = {n for group in WORKERS.findall(body) for n in re.findall(r"\d+", group)}
-            numbers = {_norm(n) for n in NUMBER.findall(WORKERS.sub(" ", body))} - asked
+            numbers = {_norm(n) for n in NUMBER.findall(_digits(WORKERS.sub(" ", body)))} - asked
             rules = _rules_named(body)
             snippet = body.strip()[:60]
             if not facts:
@@ -384,6 +384,30 @@ def _lines(text: str) -> list[list[str]]:
         if claims:
             lines.append(claims)
     return lines
+
+
+UNITS = (
+    "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen "
+    "fifteen sixteen seventeen eighteen nineteen"
+).split()
+TENS = "_ _ twenty thirty forty fifty sixty seventy eighty ninety".split()
+SPELLED = re.compile(
+    rf"\b(?:({'|'.join(TENS[2:])})(?:[- ]({'|'.join(UNITS[1:10])}))?|({'|'.join(UNITS)}))\b",
+    re.I,
+)
+
+
+def _digits(text: str) -> str:
+    """Numbers written as words become digits, so "twenty-two workers" is checked too."""
+
+    def value(m: re.Match[str]) -> str:
+        if m.group(3):
+            n = UNITS.index(m.group(3).lower())
+            return m.group(0) if n < 2 else str(n)  # "no one", "one of the risks"
+        unit = UNITS.index(m.group(2).lower()) if m.group(2) else 0
+        return str(TENS.index(m.group(1).lower()) * 10 + unit)
+
+    return SPELLED.sub(value, text)
 
 
 def _rules_named(body: str) -> list[tuple[RuleId, str]]:

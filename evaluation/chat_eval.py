@@ -47,7 +47,13 @@ def when(seconds: float) -> str:
 
 def word(n: int) -> str:
     words = "zero one two three four five six seven eight nine ten".split()
-    return rf"\b({n}|{words[n]})\b" if n < len(words) else rf"\b{n}\b"
+    tens = "_ _ twenty thirty forty fifty sixty seventy eighty ninety".split()
+    if n < len(words):
+        return rf"\b({n}|{words[n]})\b"
+    if 20 <= n < 100:
+        spelled = tens[n // 10] + (rf"[- ]{words[n % 10]}" if n % 10 else "")
+        return rf"\b({n}|{spelled})\b"
+    return rf"\b{n}\b"
 
 
 def build_cases(bundle: RunBundle) -> list[Case]:

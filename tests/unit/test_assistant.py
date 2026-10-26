@@ -289,3 +289,10 @@ def test_stricter_claims_need_a_matching_citation(bundle: RunBundle) -> None:
     assert any(f.startswith("tone") for f in check_answer("The site is safe [RUN].", shown))
     # headings and scope remarks need no citation
     assert check_answer("Summary:\nThe facts don't say which crew was on shift.", shown) == []
+
+
+def test_numbers_written_as_words_are_checked_too(bundle: RunBundle) -> None:
+    shown = build_facts(bundle)
+    failures = check_answer("Ninety-seven workers were seen [RUN].", shown)
+    assert any(f.startswith("numbers") and "97" in f for f in failures)
+    assert check_answer("No one was hurt, one of the risks [RUN].", shown) == []
