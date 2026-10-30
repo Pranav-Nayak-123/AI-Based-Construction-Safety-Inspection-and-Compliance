@@ -133,6 +133,16 @@ browser <-- /jobs/<job> live status <-- heartbeat and progress from the worker
 - **When it runs.** Jobs wait in the queue while the worker is offline and start when it comes back.
 - **No zones.** An uploaded clip has no site configuration, so the zone and edge rules (R3, R5) report "not assessed".
 
+**Rolling back uploads.** The pre-upload site is saved as the tag `checkpoint/pre-upload` (and the branch `backup/pre-upload`) on both remotes. The feature is one merge commit, so undoing it is one revert. That keeps history intact, needs no force-push, and makes Render redeploy the old site:
+
+```bash
+git switch feat/cv-pipeline
+git revert -m 1 <merge commit of feat/video-upload>   # `git log --merges -1` shows it
+git push origin feat/cv-pipeline && git push standalone feat/cv-pipeline:main
+```
+
+To switch uploads off without touching the code, delete `SAFETY_UPLOAD_CODE` on Render. The Upload page then says uploads are not enabled.
+
 ## Privacy and data
 
 - **What is published.**
