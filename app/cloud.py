@@ -9,6 +9,10 @@
     POST /api/runs/{run_id}/reviews a reviewer's verdict (stored when a database is configured)
     GET  /api/runs/{run_id}/reviews team precision per rule and reviewer agreement (kappa)
     GET  /api/stats                 chatbot monitoring: answers, model share, latency, failures
+    GET  /upload                    upload a video (access code) for the GPU worker
+    POST /api/jobs?filename=        the video as the raw body -> {job_id, status_url}
+    GET  /jobs/{job_id}             live status page; GET /api/jobs/{job_id} as JSON
+    POST /api/worker/beat           heartbeat and progress from tools/worker.py (worker key)
     GET  /healthz                   liveness and configuration (never secrets)
     GET  /docs                      OpenAPI
 
@@ -25,6 +29,10 @@ Configuration, all from the environment (cloud secrets; never committed):
     SUPABASE_URL, SUPABASE_SERVICE_KEY   optional: chat logs and reviews in Postgres
     SAFETY_CHAT_PER_MINUTE   per-client limit on chat requests (default 8)
     SAFETY_REVIEWERS         optional: only these reviewers' verdicts count (comma-separated)
+    SAFETY_INBOX_REPO        uploads: private dataset the GPU worker polls (app/inbox.py)
+    SAFETY_UPLOAD_CODE       uploads: the access code shared with uploaders
+    SAFETY_WORKER_KEY        uploads: secret the worker sends with its heartbeat
+    (uploads also need HF_TOKEN with write access)
 """
 
 from __future__ import annotations
@@ -35,6 +43,7 @@ import logging
 import os
 import re
 import secrets
+import tempfile
 import threading
 import time
 import urllib.request
@@ -48,7 +57,9 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
+from app.inbox import JOB_ID, MAX_UPLOAD_BYTES, MAX_VIDEO_SECONDS, VIDEO_SUFFIXES, Inbox
 from evaluation.reviews import allowed_reviewers, fetch_supabase, summarize
 from llm.assistant.chat import RiskAssistant
 from llm.assistant.providers import ProviderError, from_env
@@ -440,6 +451,368 @@ def monitoring() -> dict[str, Any]:
     return stats.summary() | {"llm": provider.model if provider else None}
 
 
+# ---------------------------------------------------------------------- uploads
+
+
+def _inbox() -> Inbox | None:
+    """Uploads are on only when the inbox, an access code and a write token are configured."""
+    repo, code = os.environ.get("SAFETY_INBOX_REPO"), os.environ.get("SAFETY_UPLOAD_CODE")
+    if not repo or not code:
+        return None
+    return Inbox(repo, os.environ.get("HF_TOKEN") or None)
+
+
+WORKER: dict[str, Any] = {"seen": 0.0, "state": "offline"}
+WORKER_FRESH_S = 90
+upload_limiter = Limiter(4)
+_jobs_cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
+
+
+def _worker_status() -> dict[str, Any]:
+    age = time.time() - WORKER["seen"] if WORKER["seen"] else None
+    online = age is not None and age < WORKER_FRESH_S
+    return {
+        "online": online,
+        "state": WORKER.get("state", "offline") if online else "offline",
+        "last_seen_s": round(age) if age is not None else None,
+    }
+
+
+@app.post("/api/jobs")
+async def create_job(request: Request, filename: str = "upload.mp4") -> dict[str, Any]:
+    """Queue an uploaded video (raw request body) for the GPU worker."""
+    inbox = _inbox()
+    if inbox is None:
+        raise HTTPException(503, "uploads are not enabled on this deployment")
+    code = request.headers.get("x-upload-code", "")
+    if not secrets.compare_digest(code.encode(), os.environ["SAFETY_UPLOAD_CODE"].encode()):
+        raise HTTPException(403, "wrong access code")
+    if not upload_limiter.allow(_client(request)):
+        raise HTTPException(429, "too many uploads; try again in a minute")
+    if not filename.lower().endswith(VIDEO_SUFFIXES):
+        raise HTTPException(415, "upload a video: " + ", ".join(VIDEO_SUFFIXES))
+    declared = int(request.headers.get("content-length") or 0)
+    if declared > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, f"videos are limited to {MAX_UPLOAD_BYTES // 2**20} MB")
+    with tempfile.TemporaryDirectory() as scratch:
+        path = Path(scratch) / "upload.bin"
+        size = 0
+        with path.open("wb") as out:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        413, f"videos are limited to {MAX_UPLOAD_BYTES // 2**20} MB"
+                    )
+                out.write(chunk)
+        if size == 0:
+            raise HTTPException(400, "the upload was empty")
+        try:
+            job = await run_in_threadpool(inbox.submit, path, filename)
+        except Exception as error:  # noqa: BLE001 - storage outage, bad token
+            log.error(json.dumps({"event": "upload_failed", "error": str(error)}))
+            raise HTTPException(502, "the upload could not be stored; try again") from error
+    log.info(json.dumps({"event": "upload_queued", "job": job["job_id"], "bytes": size}))
+    return {"job_id": job["job_id"], "status_url": f"/jobs/{job['job_id']}"}
+
+
+@app.get("/api/jobs/{job_id}")
+def job_status(job_id: str) -> dict[str, Any]:
+    inbox = _inbox()
+    if inbox is None:
+        raise HTTPException(503, "uploads are not enabled on this deployment")
+    if not JOB_ID.match(job_id):
+        raise HTTPException(404, "no such job")
+    cached = _jobs_cache.get(job_id)
+    if cached and time.time() - cached[0] < 4:
+        job = cached[1]
+    else:
+        try:
+            job = inbox.job(job_id)
+        except OSError as error:
+            raise HTTPException(502, "job status is unavailable right now") from error
+        _jobs_cache[job_id] = (time.time(), job)
+    if job is None:
+        raise HTTPException(404, "no such job")
+    body = {k: job.get(k) for k in ("job_id", "status", "video", "size", "created_at", "message")}
+    body["worker"] = _worker_status()
+    if job.get("status") == "running" and WORKER.get("job_id") == job_id:
+        body["progress"] = {k: WORKER.get(k) for k in ("stage", "done", "total", "message")}
+    if job.get("status") == "done" and job.get("run_id"):
+        run_id = str(job["run_id"])
+        if run_id not in store.ids():
+            _fetch_run(run_id)
+        body["report"] = f"/runs/{run_id}/" if run_id in store.ids() else None
+    return body
+
+
+def _fetch_run(run_id: str) -> None:
+    """A run published since startup: download it and render its report with this deploy."""
+    repo = os.environ.get("SAFETY_RUNS_REPO")
+    if not repo or not RUN_ID.match(run_id):
+        return
+    from huggingface_hub import snapshot_download
+
+    from pipeline.report.html import rebuild_report
+
+    try:
+        snapshot_download(
+            repo_id=repo,
+            repo_type="dataset",
+            local_dir=store.root,
+            allow_patterns=[f"{run_id}/**"],
+            token=os.environ.get("HF_TOKEN") or None,
+        )
+        rebuild_report(store.root / run_id)
+    except Exception as error:  # noqa: BLE001 - the page offers a retry
+        log.warning(json.dumps({"event": "run_fetch_failed", "run": run_id, "error": str(error)}))
+
+
+class Beat(BaseModel):
+    state: str = Field(pattern=r"^(idle|running|paused)$")
+    job_id: str | None = Field(default=None, max_length=12)
+    stage: str | None = Field(default=None, max_length=20)
+    done: int | None = Field(default=None, ge=0)
+    total: int | None = Field(default=None, ge=0)
+    message: str | None = Field(default=None, max_length=200)
+
+
+@app.post("/api/worker/beat")
+def worker_beat(body: Beat, request: Request) -> dict[str, str]:
+    key = os.environ.get("SAFETY_WORKER_KEY", "")
+    sent = request.headers.get("x-worker-key", "")
+    if not key or not secrets.compare_digest(sent.encode(), key.encode()):
+        raise HTTPException(403, "unknown worker")
+    WORKER.update(body.model_dump(), seen=time.time())
+    return {"status": "ok"}
+
+
+@app.get("/api/worker")
+def worker_status() -> dict[str, Any]:
+    return _worker_status()
+
+
+@app.get("/upload", response_class=HTMLResponse)
+def upload_page() -> str:
+    enabled = _inbox() is not None
+    return _page(
+        "Analyse a video",
+        UPLOAD_BODY.replace("{max_mb}", str(MAX_UPLOAD_BYTES // 2**20))
+        .replace("{max_min}", f"{MAX_VIDEO_SECONDS / 60:.0f}")
+        .replace("{types}", ", ".join(s.lstrip(".") for s in VIDEO_SUFFIXES))
+        .replace("{disabled}", "" if enabled else "disabled")
+        .replace(
+            "{notice}",
+            ""
+            if enabled
+            else '<p class="note bad">Uploads are not enabled on this deployment.</p>',
+        ),
+    )
+
+
+@app.get("/jobs/{job_id}", response_class=HTMLResponse)
+def job_page(job_id: str) -> str:
+    if not JOB_ID.match(job_id):
+        raise HTTPException(404, "no such job")
+    return _page("Processing", JOB_BODY.replace("{job_id}", job_id))
+
+
+def _page(title: str, body: str) -> str:
+    return (
+        PAGE.replace("{title}", escape(title))
+        .replace("{favicon}", brand.FAVICON)
+        .replace("{fonts}", FONTS.replace("&", "&amp;"))
+        .replace("{wordmark}", brand.wordmark(30))
+        .replace("{body}", body)
+    )
+
+
+PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title} · Ground Truth</title><link rel="icon" href="{favicon}">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="{fonts}">
+<style>
+:root { color-scheme:light; --bg:#f6f7f9; --surface:#fff; --surface-2:#f1f3f6; --line:#e2e5ea; --line-2:#d3d8e0;
+  --text:#0e1116; --text-2:#465061; --text-3:#7a8394; --accent:#2563eb; --accent-soft:#e8efff;
+  --good:#0ca30c; --warning:#fab219; --critical:#d03b3b; --grid:rgba(37,99,235,.07);
+  --display:"Space Grotesk", Inter, "Segoe UI", system-ui, sans-serif; --mono:"JetBrains Mono", ui-monospace, Consolas, monospace; }
+@media (prefers-color-scheme: dark) { :root { color-scheme:dark; --bg:#0c0e12; --surface:#13161b; --surface-2:#1a1e25;
+  --line:#242a33; --line-2:#2f3642; --text:#eef1f5; --text-2:#b3bbc7; --text-3:#7d8796; --accent:#5b9dff;
+  --accent-soft:rgba(91,157,255,.13); --grid:rgba(91,157,255,.06); } }
+* { box-sizing:border-box; } [hidden] { display:none !important; }
+body { margin:0; min-height:100vh; background:var(--bg); color:var(--text); font:15px/1.6 Inter, "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing:antialiased; background-image:linear-gradient(var(--grid) 1px, transparent 1px),
+  linear-gradient(90deg, var(--grid) 1px, transparent 1px); background-size:32px 32px; }
+a { color:var(--accent); text-decoration:none; }
+.nav { border-bottom:1px solid var(--line); background:color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter:blur(12px); }
+.nav .wrap { display:flex; align-items:center; height:62px; gap:20px; }
+.wrap { max-width:760px; margin:0 auto; padding:0 24px; }
+.logo { display:flex; align-items:center; gap:10px; color:var(--text); font-family:var(--display); }
+.logo-mark { display:block; } .wordmark { font-weight:700; letter-spacing:.05em; }
+.nav .back { margin-left:auto; color:var(--text-2); font-size:.9rem; }
+main.wrap { padding-top:48px; padding-bottom:64px; }
+h1 { font-family:var(--display); font-size:2rem; letter-spacing:-.02em; margin:0 0 8px; }
+.lead { color:var(--text-2); margin:0 0 24px; }
+.card { background:var(--surface); border:1px solid var(--line); border-radius:18px; padding:24px; }
+label.field { display:block; font-weight:600; font-size:.88rem; margin:0 0 6px; }
+input[type=password], input[type=text] { width:100%; border:1px solid var(--line-2); background:var(--surface); color:var(--text);
+  border-radius:10px; padding:11px 13px; font:inherit; }
+.drop { margin:18px 0; border:2px dashed var(--line-2); border-radius:14px; padding:34px 20px; text-align:center; cursor:pointer;
+  transition:border-color .15s, background .15s; }
+.drop:hover, .drop.over { border-color:var(--accent); background:var(--accent-soft); }
+.drop b { display:block; font-family:var(--display); font-size:1.1rem; }
+.drop span { color:var(--text-3); font-size:.86rem; }
+.drop .file { color:var(--text); font-family:var(--mono); font-size:.86rem; margin-top:8px; }
+.btn { display:inline-flex; align-items:center; justify-content:center; gap:8px; border-radius:10px; padding:11px 18px; font-weight:600;
+  font-size:.95rem; border:1px solid var(--accent); background:var(--accent); color:#fff; cursor:pointer; font-family:inherit; }
+.btn:disabled { opacity:.5; cursor:not-allowed; }
+.btn.ghost { background:transparent; color:var(--text); border-color:var(--line-2); }
+.bar { height:8px; border-radius:99px; background:var(--surface-2); overflow:hidden; margin:14px 0 6px; }
+.bar i { display:block; height:100%; width:0; background:var(--accent); border-radius:99px; transition:width .3s; }
+.note { color:var(--text-3); font-size:.85rem; margin:14px 0 0; } .note.bad { color:var(--critical); }
+.facts { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:10px; margin-top:22px; }
+.facts div { border:1px dashed var(--line-2); border-radius:12px; padding:12px 14px; font-size:.85rem; color:var(--text-2); }
+.facts b { display:block; color:var(--text); }
+.steps { list-style:none; margin:20px 0 0; padding:0; }
+.steps li { display:grid; grid-template-columns:28px 1fr; gap:12px; align-items:start; padding:12px 0; border-bottom:1px solid var(--line); color:var(--text-3); }
+.steps li:last-child { border-bottom:none; }
+.steps .dot { width:22px; height:22px; border-radius:50%; border:2px solid var(--line-2); display:grid; place-items:center; font-size:.7rem; margin-top:2px; }
+.steps li.on { color:var(--text); } .steps li.on .dot { border-color:var(--accent); box-shadow:0 0 0 4px var(--accent-soft); }
+.steps li.ok { color:var(--text); } .steps li.ok .dot { border-color:var(--good); background:var(--good); color:#fff; }
+.steps li.bad .dot { border-color:var(--critical); background:var(--critical); color:#fff; } .steps li.bad { color:var(--critical); }
+.steps small { display:block; color:var(--text-3); font-size:.82rem; }
+.pill { display:inline-flex; align-items:center; gap:7px; font-size:.8rem; border:1px solid var(--line-2); border-radius:99px; padding:3px 11px; color:var(--text-2); }
+.pill::before { content:""; width:8px; height:8px; border-radius:50%; background:var(--text-3); }
+.pill.on::before { background:var(--good); box-shadow:0 0 0 3px color-mix(in srgb, var(--good) 25%, transparent); }
+.mono { font-family:var(--mono); font-size:.82rem; color:var(--text-3); }
+@media (max-width:600px) { .facts { grid-template-columns:1fr; } h1 { font-size:1.6rem; } }
+</style></head><body>
+<nav class="nav"><div class="wrap"><a class="logo" href="/" aria-label="Ground Truth home">{wordmark}</a>
+<a class="back" href="/">← All runs</a></div></nav>
+<main class="wrap">{body}</main></body></html>"""
+
+UPLOAD_BODY = """<h1>Analyse your own video</h1>
+<p class="lead">Upload fixed-camera construction footage. The full pipeline runs on the team's GPU
+worker: detection, tracking, the eight hazard rules, the 3D twin and a report with the assistant.</p>
+<form class="card" id="up">
+  <label class="field" for="code">Access code</label>
+  <input type="password" id="code" autocomplete="off" placeholder="Shared by the team" required {disabled}>
+  <div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose a video">
+    <b>Drop a video here, or click to choose</b>
+    <span>{types} · up to {max_mb} MB · up to {max_min} minutes</span>
+    <div class="file" id="file"></div>
+  </div>
+  <input type="file" id="pick" accept="video/*" hidden {disabled}>
+  <button class="btn" type="submit" id="go" {disabled}>Upload and analyse</button>
+  <div id="sending" hidden><div class="bar"><i id="fill"></i></div><span class="mono" id="pct">0%</span></div>
+  <p class="note" id="worker">Checking the worker…</p>
+  <p class="note bad" id="err" hidden></p>
+  {notice}
+</form>
+<div class="facts">
+  <div><b>Private by default</b>Faces are pixelated in everything the run publishes.</div>
+  <div><b>Raw video deleted</b>The upload is removed from the inbox as soon as processing ends.</div>
+  <div><b>No zones drawn</b>Zone and edge rules (R3, R5) need a site setup, so they report "not assessed".</div>
+</div>
+<script>
+(() => {
+const $ = id => document.getElementById(id);
+let file = null;
+const drop = $('drop'), pick = $('pick');
+function choose(f) { file = f; $('file').textContent = f ? f.name + ' · ' + (f.size / 1048576).toFixed(1) + ' MB' : ''; }
+drop.addEventListener('click', () => pick.click());
+drop.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick.click(); } });
+pick.addEventListener('change', () => choose(pick.files[0] || null));
+['dragenter', 'dragover'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', e => choose(e.dataTransfer.files[0] || null));
+try { $('code').value = localStorage.getItem('gt-upload-code') || ''; } catch (e) {}
+fetch('/api/worker').then(r => r.json()).then(w => {
+  $('worker').textContent = w.online
+    ? 'The GPU worker is online' + (w.state === 'running' ? ' and busy: your job will queue.' : ': your video starts right away.')
+    : 'The GPU worker is offline right now: your video will wait in the queue until it starts.';
+}).catch(() => { $('worker').textContent = ''; });
+$('up').addEventListener('submit', e => {
+  e.preventDefault(); $('err').hidden = true;
+  if (!file) { $('err').textContent = 'Choose a video first.'; $('err').hidden = false; return; }
+  const code = $('code').value.trim();
+  try { localStorage.setItem('gt-upload-code', code); } catch (e) {}
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/api/jobs?filename=' + encodeURIComponent(file.name));
+  xhr.setRequestHeader('X-Upload-Code', code);
+  xhr.upload.onprogress = p => { if (p.lengthComputable) { const v = Math.round(100 * p.loaded / p.total);
+    $('fill').style.width = v + '%'; $('pct').textContent = v < 100 ? v + '% uploaded' : 'Storing…'; } };
+  xhr.onload = () => {
+    let body = {}; try { body = JSON.parse(xhr.responseText); } catch (e) {}
+    if (xhr.status === 200) { location.href = body.status_url; return; }
+    $('go').disabled = false; $('sending').hidden = true;
+    $('err').textContent = body.detail || ('Upload failed (' + xhr.status + ').'); $('err').hidden = false;
+  };
+  xhr.onerror = () => { $('go').disabled = false; $('sending').hidden = true; $('err').textContent = 'Network error during upload.'; $('err').hidden = false; };
+  $('go').disabled = true; $('sending').hidden = false;
+  xhr.send(file);
+});
+})();
+</script>"""
+
+JOB_BODY = """<h1 id="title">Processing your video</h1>
+<p class="lead"><span class="mono">Job {job_id}</span> · <span class="pill" id="worker">worker</span></p>
+<div class="card">
+  <ul class="steps">
+    <li id="s-queued"><span class="dot">1</span><div>Uploaded and queued<small id="m-queued">Waiting for the GPU worker.</small></div></li>
+    <li id="s-detect"><span class="dot">2</span><div>Detecting and tracking workers<small id="m-detect"></small>
+      <div class="bar" id="b-detect" hidden><i></i></div></div></li>
+    <li id="s-render"><span class="dot">3</span><div>Rules, risk register and 3D twin<small id="m-render"></small>
+      <div class="bar" id="b-render" hidden><i></i></div></div></li>
+    <li id="s-done"><span class="dot">4</span><div>Report ready<small id="m-done"></small></div></li>
+  </ul>
+  <p style="margin:18px 0 0" id="actions" hidden><a class="btn" id="open" href="#">Open the report →</a></p>
+  <p class="note">You can close this page: the job keeps running, and this link shows its status.</p>
+</div>
+<script>
+(() => {
+const $ = id => document.getElementById(id);
+const order = ['queued', 'detect', 'render', 'done'];
+function mark(current, failed) {
+  const at = order.indexOf(current);
+  order.forEach((s, i) => { const li = $('s-' + s); li.className = i < at ? 'ok' : i === at ? (failed ? 'bad' : 'on') : '';
+    li.querySelector('.dot').textContent = i < at ? '✓' : (i === at && failed ? '!' : i + 1); });
+}
+function bar(stage, p) { const b = $('b-' + stage); b.hidden = false; b.firstElementChild.style.width = Math.round(100 * p) + '%'; }
+async function poll() {
+  let j;
+  try { const r = await fetch('/api/jobs/{job_id}'); if (r.status === 404) { $('title').textContent = 'No such job'; return; } j = await r.json(); }
+  catch (e) { setTimeout(poll, 5000); return; }
+  const w = j.worker || {};
+  $('worker').textContent = w.online ? (w.state === 'paused' ? 'worker paused' : 'worker online') : 'worker offline';
+  $('worker').className = 'pill' + (w.online && w.state !== 'paused' ? ' on' : '');
+  if (j.status !== 'queued') $('m-queued').textContent = 'Picked up by the GPU worker.';
+  if (j.status === 'queued') {
+    mark('queued'); $('m-queued').textContent = w.online ? 'The worker will pick it up shortly.' : 'Waiting for the GPU worker to come online.';
+  } else if (j.status === 'running') {
+    const p = j.progress || {};
+    const stage = p.stage === 'render' ? 'render' : 'detect';
+    mark(stage);
+    if (p.total) bar(stage, p.done / p.total);
+    if (stage === 'render') bar('detect', 1);
+    $('m-' + stage).textContent = p.total ? p.done + ' of ' + p.total + ' frames' : (p.message || 'Starting…');
+  } else if (j.status === 'done') {
+    mark('done'); bar('detect', 1); bar('render', 1);
+    if (j.report) { $('s-done').className = 'ok'; $('s-done').querySelector('.dot').textContent = '✓';
+      $('m-done').textContent = 'Finished.'; $('open').href = j.report; $('actions').hidden = false; $('title').textContent = 'Your report is ready'; return; }
+    $('m-done').textContent = 'Fetching the published run…';
+  } else if (j.status === 'failed') {
+    const at = (j.progress && j.progress.stage === 'render') ? 'render' : 'detect';
+    mark(at, true); $('m-' + at).textContent = j.message || 'Processing failed.'; $('title').textContent = 'Processing failed'; return;
+  }
+  setTimeout(poll, 3000);
+}
+poll();
+})();
+</script>"""
+
+
 @app.get("/", response_class=HTMLResponse)
 def gallery() -> str:
     return gallery_page()
@@ -649,7 +1022,7 @@ footer .links { margin-left:auto; display:flex; gap:18px; } footer a { color:var
 </style></head><body>
 <nav class="nav"><div class="wrap">
   <a class="logo" href="/" aria-label="Ground Truth home">{wordmark}</a>
-  <div class="links"><a class="hide-sm" href="#runs">Runs</a><a class="hide-sm" href="#how">How it works</a>
+  <div class="links"><a class="hide-sm" href="#runs">Runs</a><a class="hide-sm" href="#how">How it works</a><a href="/upload">Upload</a>
     <a class="hide-sm" href="/docs">API</a><a class="btn" href="{github}">GitHub</a></div>
 </div></nav>
 <header class="hero"><div class="wrap">
@@ -659,7 +1032,7 @@ footer .links { margin-left:auto; display:flex; gap:18px; } footer a { color:var
     <p class="lead">Fixed construction-camera footage turned into confirmed incidents with evidence clips,
     a 3D digital twin, a 5×5 risk register and an assistant that cites the run for every claim.</p>
     <div class="cta"><a class="btn primary" href="{featured_url}">Open the {featured_name} report →</a>
-      <a class="btn" href="#how">How it works</a></div>
+      <a class="btn" href="/upload">Analyse your video</a></div>
   </div>
   {featured_shot}
 </div></header>
