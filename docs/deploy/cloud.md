@@ -98,12 +98,61 @@ SAFETY_RUNS_DIR=output SAFETY_LLM_PROVIDER=ollama uv run uvicorn app.cloud:app -
 
 Any other OpenAI-compatible provider works the same way: groq, openrouter, hf, anthropic or custom (`llm/assistant/providers.py`).
 
+## Video uploads (optional)
+
+The site can take a video upload and process it on the GPU workstation. Render's free tier has no GPU and 512 MB of RAM, so it only queues the job.
+
+```
+browser --(access code)--> /upload --> private inbox dataset (inbox/<job>/video + job.json)
+                                              |
+            workstation: tools/worker.py <----+  polls, runs ProcessJob on the GPU,
+                                              |  publishes the run, deletes the upload
+browser <-- /jobs/<job> live status <-- heartbeat and progress from the worker
+```
+
+**One-time setup:**
+
+1. **Hugging Face token.** Create a token with **write** access and put it in `HF_TOKEN` on Render. The site writes uploads into the inbox.
+2. **Render environment variables:**
+   - `SAFETY_INBOX_REPO=<user>/safety-twin-inbox`: the inbox dataset. The first upload creates it, private.
+   - `SAFETY_UPLOAD_CODE`: the access code you share with uploaders.
+   - `SAFETY_WORKER_KEY`: a long random secret.
+3. **On the workstation** (mains power), start the worker:
+
+   ```powershell
+   $env:SAFETY_WORKER_KEY = "<the same secret>"
+   uv run --no-sync python tools/worker.py --site https://safety-twin.onrender.com `
+       --inbox <user>/safety-twin-inbox --runs <user>/safety-twin-runs
+   ```
+
+   The worker uses your `hf auth login` token. It pauses while the laptop is on battery.
+
+**Limits:**
+
+- **Size and length.** Uploads are capped at 200 MB and 5 minutes. Each client can upload 4 per minute.
+- **When it runs.** Jobs wait in the queue while the worker is offline and start when it comes back.
+- **No zones.** An uploaded clip has no site configuration, so the zone and edge rules (R3, R5) report "not assessed".
+
+**Rolling back uploads.** The pre-upload site is saved as the tag `checkpoint/pre-upload` (and the branch `backup/pre-upload`) on both remotes. The feature is one merge commit, so undoing it is one revert. That keeps history intact, needs no force-push, and makes Render redeploy the old site:
+
+```bash
+git switch feat/cv-pipeline
+git revert -m 1 <merge commit of feat/video-upload>   # `git log --merges -1` shows it
+git push origin feat/cv-pipeline && git push standalone feat/cv-pipeline:main
+```
+
+To switch uploads off without touching the code, delete `SAFETY_UPLOAD_CODE` on Render. The Upload page then says uploads are not enabled.
+
 ## Privacy and data
 
 - **What is published.**
   - Run bundles from the public SARD research footage, with worker faces pixelated in every frame, clip and crop.
   - Workers are known only by track number; there is no identity or biometrics.
   - The Hugging Face dataset is private, and only the server's read token can fetch it.
+- **Uploads.**
+  - Raw uploads sit in a separate private inbox dataset only until their job ends. The worker then deletes them, whether the job succeeded or failed.
+  - What gets published is the processed run, with faces pixelated and checked by the same gate as `tools/publish_run.py`.
+  - Only people with the access code can upload.
 - **What the model sees.** The chatbot sends Gemini the run's facts: counts, times, track numbers, zone names and ratings, plus the user's question. No images are sent. On Gemini's free tier, Google may use prompts to improve its products, so don't type personal data into the chat.
 - **What is logged.** Chat logs keep the question text for quality review. The client is stored only as a salted hash. Logs are deleted with the Supabase project (see the shutdown plan).
 

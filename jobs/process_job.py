@@ -40,16 +40,19 @@ from pipeline.intake.geometry_gate import (
 from pipeline.intake.probe import VideoMetadata, probe_video
 from pipeline.intake.stabilization import DriftProbe, probe_drift
 from pipeline.mapping.camera_model import (
+    Camera,
     GroundMapper,
     PlaneFit,
+    default_camera,
     fit_camera,
     sample_vertical_pairs,
+    visible_ground,
 )
 from pipeline.mapping.frame_context import FrameContextBuilder
 from pipeline.mapping.stitching import StitchedStore, appearance_from_video, stitch
 from pipeline.output.bundle import read_model, validate_bundle, write_model
 from pipeline.output.summaries import TrackSummaryBuilder
-from pipeline.output.twin_data import TwinRecorder
+from pipeline.output.twin_data import FALLBACK_FAR_WH, TwinRecorder
 from pipeline.report.html import write_report
 from pipeline.rules.catalogue import load_catalogue
 from pipeline.rules.engine import RuleEngine
@@ -440,8 +443,25 @@ class ProcessJob:
     def _twin_export(self, pass2: Pass2Result, scene: SceneCache) -> dict | None:
         """The calibrated shot's ground-plane twin for the report's 3D viewer."""
         accepted = [(shot, fit) for shot, fit in self.plane_fits.items() if fit.accepted]
-        if pass2.twin is None or not accepted:
+        if pass2.twin is None:
             return None
+        if not accepted:
+            if pass2.twin.fallback is None or not pass2.twin.positions_seen():
+                return None
+            camera_model = self._fallback_camera()
+            size = (self.config.intake.target_width, self.config.intake.target_height)
+            shot = next(iter(self.plane_fits), next(iter(scene.shot_proposals), "s0"))
+            return pass2.twin.export(
+                proposals=scene.proposals_for(shot),
+                ground=camera_model.ground,
+                camera={
+                    "height_wh": camera_model.p.height_wh,
+                    "tilt_deg": round(math.degrees(camera_model.p.tilt_rad), 2),
+                    "roll_deg": 0.0,
+                    "support": visible_ground(camera_model, *size, far_wh=FALLBACK_FAR_WH),
+                    "approximate": True,
+                },
+            )
         shot, fit = accepted[0]
         mapper = GroundMapper(fit)
         parameters = fit.parameters
@@ -635,8 +655,18 @@ class ProcessJob:
             builder,
             engine,
             TrackSummaryBuilder(self.run_id),
-            TwinRecorder(fps=self.config.intake.target_fps),
+            TwinRecorder(fps=self.config.intake.target_fps, fallback=self._fallback_ground(gate)),
         )
+
+    def _fallback_camera(self) -> Camera:
+        size = (self.config.intake.target_width, self.config.intake.target_height)
+        return Camera(default_camera(*size))
+
+    def _fallback_ground(self, gate: GeometryGate):  # noqa: ANN202
+        """A steady camera that the workers could not calibrate still gets an approximate twin."""
+        if not gate.supported or any(fit.accepted for fit in self.plane_fits.values()):
+            return None
+        return self._fallback_camera().ground
 
     def _publish(
         self,

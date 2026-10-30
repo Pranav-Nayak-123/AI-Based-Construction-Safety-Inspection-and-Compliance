@@ -17,7 +17,7 @@ services:
     envVars:
       - key: SAFETY_RUNS_REPO  # Hugging Face dataset with published runs
         sync: false
-      - key: HF_TOKEN  # read-only token, needed because the dataset is private
+      - key: HF_TOKEN  # private datasets; needs WRITE access when uploads are enabled
         sync: false
       - key: SAFETY_LLM_PROVIDER
         value: gemini
@@ -28,4 +28,12 @@ services:
       - key: SUPABASE_URL  # optional: chat logs and reviews
         sync: false
       - key: SUPABASE_SERVICE_KEY
+        sync: false
+      # Video uploads (optional): queued in a private inbox dataset, processed by
+      # tools/worker.py on the GPU workstation. Leave unset to keep uploads off.
+      - key: SAFETY_INBOX_REPO  # e.g. <user>/safety-twin-inbox
+        sync: false
+      - key: SAFETY_UPLOAD_CODE  # access code shared with uploaders
+        sync: false
+      - key: SAFETY_WORKER_KEY  # long random secret; the worker sends it with each heartbeat
         sync: false
