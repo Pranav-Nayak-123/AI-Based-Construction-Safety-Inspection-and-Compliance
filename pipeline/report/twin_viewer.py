@@ -603,6 +603,11 @@ def section(
         if video
         else '<p class="twin-empty">No camera video in this bundle.</p>'
     )
+    approx_pill = (
+        '<span class="pill" style="color:var(--warning)" title="The camera could not be calibrated; positions are approximate">Approximate layout</span>'
+        if (data.get("camera") or {}).get("approximate")
+        else ""
+    )
     legend = (
         '<div class="twin-legend">'
         '<span><i style="background:#6b819e"></i>Worker, no hazard</span>'
@@ -618,7 +623,7 @@ def section(
 <div class="twin-layout">
   <div class="card twin-stage">
     <div id="twin-canvas" role="img" aria-label="Interactive 3D digital twin of the site">
-      <div class="twin-hud"><span class="pill" id="twin-counts"></span><span class="pill">1 grid square = 1 worker height</span></div>
+      <div class="twin-hud"><span class="pill" id="twin-counts"></span>{approx_pill}<span class="pill">1 grid square = 1 worker height</span></div>
       <div class="twin-views"><button data-view="cctv" aria-pressed="true">CCTV view</button><button data-view="iso">Isometric</button><button data-view="top">Top-down</button></div>
       <div class="twin-tip" id="twin-tip"></div>
     </div>

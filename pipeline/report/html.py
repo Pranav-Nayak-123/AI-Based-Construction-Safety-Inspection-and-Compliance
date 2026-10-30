@@ -827,9 +827,14 @@ def render_report(
         card=_card,
     )
     if twin is not None:
+        approximate = bool((twin.get("camera") or {}).get("approximate"))
         twin_page = _page_head(
             "Digital twin",
-            "The site rebuilt in 3D from the camera, replayed in step with the video.",
+            "Approximate layout: the camera could not be calibrated from the workers in this "
+            "clip, so positions come from a typical site-camera view. Use it to see who was "
+            "where; distances are not measured."
+            if approximate
+            else "The site rebuilt in 3D from the camera, replayed in step with the video.",
         ) + twin_viewer.section(
             twin,
             video,

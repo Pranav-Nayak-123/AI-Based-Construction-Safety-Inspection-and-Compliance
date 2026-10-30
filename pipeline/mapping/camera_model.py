@@ -416,6 +416,39 @@ def _bootstrap(
     return replicates
 
 
+def default_camera(width: float, height: float) -> CameraParameters:
+    """A typical site CCTV view, for the twin's layout when the workers could not calibrate.
+
+    About 58° wide, 3 WH up, tilted so the horizon sits just above the frame. Good enough to
+    lay workers out in 3D; never used for a distance or a rule.
+    """
+    focal = 0.9 * width
+    cx, cy = width / 2.0, height / 2.0
+    return CameraParameters(
+        focal_px=focal,
+        tilt_rad=math.atan(1.15 * cy / focal),
+        roll_rad=0.0,
+        height_wh=3.0,
+        principal=(cx, cy),
+    )
+
+
+def visible_ground(
+    camera: Camera, width: float, height: float, far_wh: float
+) -> list[tuple[float, float]]:
+    """The ground the frame covers, from its bottom edge out to `far_wh`, as a polygon."""
+    rows = np.linspace(height, 0.0, 60)
+    left = camera.ground(np.stack([np.zeros_like(rows), rows], axis=1))
+    right = camera.ground(np.stack([np.full_like(rows, width), rows], axis=1))
+    keep = np.isfinite(left[:, 1]) & np.isfinite(right[:, 1]) & (left[:, 1] <= far_wh)
+    keep &= right[:, 1] <= far_wh
+    left, right = left[keep], right[keep]
+    if len(left) < 2:
+        return []
+    ring = [left[0], right[0], right[-1], left[-1]]
+    return [(round(float(x), 3), round(float(y), 3)) for x, y in ring]
+
+
 class GroundMapper:
     """Maps pixels to the ground for the point fit and every bootstrap replicate at once."""
 

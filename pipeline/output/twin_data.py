@@ -32,6 +32,7 @@ from shared.schemas.scene import GeometryType, ProposalType, SceneProposal
 SMOOTH_SIGMA_S = 0.4
 GAP_SPLIT_S = 0.6
 SAMPLE_HZ = 5.0
+FALLBACK_FAR_WH = 40.0  # beyond this a default camera's guess is too far off to draw
 RULE_BITS = {rule: 1 << index for index, rule in enumerate(RuleId)}
 
 
@@ -56,6 +57,20 @@ class TwinRecorder:
     )
     _positions: dict[int, dict[str, tuple[float, float]]] = field(default_factory=dict)
     end_time_s: float = 0.0
+    # Uncalibrated but steady camera: foot pixels → ground through a default camera, for the
+    # twin's layout only (rules never see these positions).
+    fallback: Callable[[np.ndarray], np.ndarray] | None = None
+
+    def _position(self, worker) -> tuple[float, float] | None:  # noqa: ANN001
+        point = worker.relative_position
+        if point is not None and np.isfinite(point.x) and np.isfinite(point.y):
+            return point.x, point.y
+        if point is None and self.fallback is not None:
+            anchor = worker.anchor_reference
+            x, y = self.fallback(np.array([[anchor.x, anchor.y]], np.float64))[0]
+            if np.isfinite(x) and np.isfinite(y) and 0.0 <= y <= FALLBACK_FAR_WH:
+                return float(x), float(y)
+        return None
 
     def add(self, context: FrameContext, output: FrameRuleOutput) -> None:
         self.end_time_s = max(self.end_time_s, context.video_time_s)
@@ -65,8 +80,8 @@ class TwinRecorder:
             level = 1 if alert.state is AlertState.PENDING_ALERT else 2
             states[alert.track_id] = (max(state, level), rules | RULE_BITS[alert.rule_id])
         for worker in context.workers():
-            point = worker.relative_position
-            if point is None or not (np.isfinite(point.x) and np.isfinite(point.y)):
+            point = self._position(worker)
+            if point is None:
                 continue
             state, rules = states.get(worker.canonical_track_id, (0, 0))
             helmet = worker.helmet.state.value if worker.helmet else "unknown"
@@ -74,8 +89,8 @@ class TwinRecorder:
                 _Sample(
                     frame=context.frame_index,
                     t=context.video_time_s,
-                    x=point.x,
-                    y=point.y,
+                    x=point[0],
+                    y=point[1],
                     state=state,
                     rules=rules,
                     helmet={"helmet": "h", "no_helmet": "n"}.get(helmet, "u"),
@@ -118,6 +133,9 @@ class TwinRecorder:
                         sample.x, sample.y = float(x), float(y)
                 for sample in segment:
                     self._positions.setdefault(sample.frame, {})[track_id] = (sample.x, sample.y)
+
+    def positions_seen(self) -> bool:
+        return bool(self._workers)
 
     def positions_at(self, frame_index: int) -> Mapping[str, tuple[float, float]]:
         return self._positions.get(frame_index, {})
