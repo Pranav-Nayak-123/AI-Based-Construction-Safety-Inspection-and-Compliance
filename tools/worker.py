@@ -82,9 +82,6 @@ def video_seconds(path: Path) -> float:
 
 
 def process(job: dict[str, Any], inbox: Inbox, site: Site, runs_repo: str, output: Path) -> None:
-    from jobs.process_job import ProcessJob
-    from tools.publish_run import check, upload
-
     job_id = job["job_id"]
     run_id = f"upload-{job_id}"
     inbox.update(job, status="running", message="Processing on the GPU worker.")
@@ -98,6 +95,10 @@ def process(job: dict[str, Any], inbox: Inbox, site: Site, runs_repo: str, outpu
                 f"the video is {seconds:.0f} s long; uploads are limited to "
                 f"{MAX_VIDEO_SECONDS:.0f} s"
             )
+        # The models load only for a video that passed the checks above.
+        from jobs.process_job import ProcessJob
+        from tools.publish_run import check, upload
+
         run_dir = output / run_id
         if run_dir.exists():  # a previous attempt died part-way
             shutil.rmtree(run_dir)
