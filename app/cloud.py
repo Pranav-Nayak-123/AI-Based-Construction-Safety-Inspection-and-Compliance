@@ -768,7 +768,7 @@ JOB_BODY = """<h1 id="title">Processing your video</h1>
     <li id="s-done"><span class="dot">4</span><div>Report ready<small id="m-done"></small></div></li>
   </ul>
   <p style="margin:18px 0 0" id="actions" hidden><a class="btn" id="open" href="#">Open the report →</a></p>
-  <p class="note">You can close this page: the job keeps running, and this link shows its status.</p>
+  <p class="note" id="keep">You can close this page: the job keeps running, and this link shows its status.</p>
 </div>
 <script>
 (() => {
@@ -800,11 +800,11 @@ async function poll() {
   } else if (j.status === 'done') {
     mark('done'); bar('detect', 1); bar('render', 1);
     if (j.report) { $('s-done').className = 'ok'; $('s-done').querySelector('.dot').textContent = '✓';
-      $('m-done').textContent = 'Finished.'; $('open').href = j.report; $('actions').hidden = false; $('title').textContent = 'Your report is ready'; return; }
+      $('m-done').textContent = 'Finished.'; $('keep').hidden = true; $('open').href = j.report; $('actions').hidden = false; $('title').textContent = 'Your report is ready'; return; }
     $('m-done').textContent = 'Fetching the published run…';
   } else if (j.status === 'failed') {
     const at = (j.progress && j.progress.stage === 'render') ? 'render' : 'detect';
-    mark(at, true); $('m-' + at).textContent = j.message || 'Processing failed.'; $('title').textContent = 'Processing failed'; return;
+    mark(at, true); $('keep').hidden = true; $('m-' + at).textContent = j.message || 'Processing failed.'; $('title').textContent = 'Processing failed'; return;
   }
   setTimeout(poll, 3000);
 }
